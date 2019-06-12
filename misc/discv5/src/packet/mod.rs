@@ -260,7 +260,7 @@ impl Packet {
     /// the magic byte sequence.
     pub fn decode(data: &[u8], magic_data: &Magic) -> Result<Self, PacketError> {
         // ensure the packet is large enough to contain the correct headers
-        if data.len() < TAG_LENGTH + MAGIC_LENGTH {
+        if data.len() < TAG_LENGTH + AUTH_TAG_LENGTH {
             debug!("Packet length too small. Length: {}", data.len());
             return Err(PacketError::TooSmall);
         }
