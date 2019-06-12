@@ -223,6 +223,11 @@ impl Enr {
         base64::encode_config(&cloned_self.encode(), base64::URL_SAFE)
     }
 
+    /// Returns the current size of the ENR.
+    pub fn size(&self) -> usize {
+        self.rlp_content.len()
+    }
+
     // Setters //
 
     /// Adds a key/value to the ENR record. A `Keypair` is required to re-sign the record once

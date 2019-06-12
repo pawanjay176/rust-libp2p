@@ -3,9 +3,10 @@
 //TODO: Document the behaviour
 
 use self::query_info::{QueryInfo, QueryType};
-use crate::kbucket::{self, KBucketsTable, NodeStatus};
+use crate::kbucket::{self, EntryRefView, KBucketsTable, NodeStatus};
 use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
+use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
 use enr::{Enr, NodeId};
 use fnv::{FnvHashMap, FnvHashSet};
@@ -23,6 +24,7 @@ use log::{debug, error, warn};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::io;
+use std::net::SocketAddr;
 use std::{marker::PhantomData, time::Duration};
 use tokio_io::{AsyncRead, AsyncWrite};
 
@@ -57,6 +59,9 @@ pub struct Discv5<TSubstream> {
 
     /// RPC requests that have been sent and are awaiting a response.
     active_rpc_requests: FnvHashMap<RpcRequest, QueryId>,
+
+    /// Keeps track of the number of responses received from a NODES response.
+    active_nodes_responses: HashMap<NodeId, usize>,
 
     /// List of peers we have established sessions with.
     connected_peers: FnvHashSet<NodeId>,
@@ -93,6 +98,7 @@ impl<TSubstream> Discv5<TSubstream> {
             kbuckets: KBucketsTable::new(local_enr.node_id.into(), Duration::from_secs(60)),
             active_queries: Default::default(),
             active_rpc_requests: Default::default(),
+            active_nodes_responses: HashMap::new(),
             connected_peers: Default::default(),
             next_query_id: 0,
             query_config,
@@ -154,8 +160,8 @@ impl<TSubstream> Discv5<TSubstream> {
         self.start_query(QueryType::FindNode(node_id));
     }
 
-    /// Constructs and sends an RPC to the session service given a `QueryInfo`.
-    fn send_rpc(
+    /// Constructs and sends a request RPC to the session service given a `QueryInfo`.
+    fn send_query_rpc(
         &mut self,
         query_id: &QueryId,
         query_info: &QueryInfo,
@@ -198,7 +204,7 @@ impl<TSubstream> Discv5<TSubstream> {
             .insert(req.clone(), query_id.clone());
         match self
             .service
-            .send_message(&dst_enr, rpc::ProtocolMessage { id, body })
+            .send_message(&dst_enr, rpc::ProtocolMessage { id, body }, None)
         {
             Ok(_) => {}
             Err(_) => {
@@ -238,18 +244,14 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Processes discovered peers from a query.
-    fn discovered<'a, I>(&mut self, query_id: &QueryId, source: &NodeId, peers: I)
-    where
-        I: Iterator<Item = &'a DiscoveredPeer> + Clone,
-    {
+    fn discovered(&mut self, query_id: &QueryId, source: &NodeId, peers: Vec<Enr>) {
         let local_id = self.kbuckets.local_key().preimage().clone();
-        let others_iter = peers.filter(|p| p.enr.node_id != local_id);
+        let others_iter = peers.into_iter().filter(|p| p.node_id != local_id);
 
         for peer in others_iter.clone() {
             self.events.push(Discv5Event::Discovered {
-                enr_id: peer.enr.node_id.clone(),
-                addresses: peer.enr.multiaddr().clone(),
-                ty: peer.connection_type.clone(),
+                enr_id: peer.node_id.clone(),
+                addresses: peer.multiaddr().clone(),
             });
         }
 
@@ -259,32 +261,14 @@ impl<TSubstream> Discv5<TSubstream> {
                     .target_mut()
                     .untrusted_enrs
                     .iter()
-                    .position(|e| e.node_id == peer.enr.node_id)
+                    .position(|e| e.node_id == peer.node_id)
                     .is_none()
                 {
-                    query.target_mut().untrusted_enrs.push(peer.enr.clone());
+                    query.target_mut().untrusted_enrs.push(peer.clone());
                 }
             }
-            query.on_success(source, others_iter.cloned().map(|kp| kp.enr.node_id))
+            query.on_success(source, others_iter.map(|kp| kp.node_id))
         }
-    }
-
-    /// Returns nodes in a specific k-bucket defined by the distance parameter. This is run in the
-    /// context of a `source` peer which is not included in the result.
-    fn get_nodes_by_distance<T: Clone>(
-        &mut self,
-        target: &kbucket::Key<T>,
-        distance: u64,
-        source: &NodeId,
-    ) -> Vec<DiscoveredPeer> {
-        let local_key = self.kbuckets.local_key().clone();
-
-        self.kbuckets
-            .closest(target)
-            .filter(|e| e.node.key.preimage() != source)
-            .take_while(|e| local_key.log2_distance(&e.node.key) == Some(distance))
-            .map(DiscoveredPeer::from)
-            .collect()
     }
 
     /// Update the connection status of a peer in the Kademlia routing table.
@@ -390,51 +374,102 @@ impl<TSubstream> Discv5<TSubstream> {
         None
     }
 
-    // TODO: split up functionality
-    fn incomming_rpc(&mut self, msg: rpc::ProtocolMessage) {
-        match msg.body {
-            rpc::RpcType::Request(req) => {
-                match req {
-                    rpc::Request::FindNode { distance } => {
-                        //self.get_nodes_by_distance(
-                    }
-                    _ => {} //TODO: Implement all RPC methods
-                }
+    fn handle_rpc_request(
+        &mut self,
+        src: SocketAddr,
+        node_id: NodeId,
+        rpc_id: u64,
+        req: rpc::Request,
+    ) {
+        // check for the ENR for the sender.
+        let enr = match self.kbuckets.entry(&node_id.into()) {
+            kbucket::Entry::Present(ref mut entry, _) => entry.value().clone(),
+            kbucket::Entry::Pending(ref mut entry, _) => entry.value().clone(),
+            _ => {
+                error!("Received a message from an unknown peer");
+                return;
             }
-            rpc::RpcType::Response(res) => {
-                // verify we know of the rpc_id
+        };
+        match req {
+            rpc::Request::FindNode { distance } => {
+                let requested_nodes = self
+                    .kbuckets
+                    .nodes_by_distance(distance)
+                    .into_iter()
+                    .filter(|entry| entry.node.key.preimage() != &node_id)
+                    .collect();
+                send_nodes_response(&mut self.service, src, rpc_id, &enr, requested_nodes);
+            }
+            _ => {} //TODO: Implement all RPC methods
+        }
+    }
+
+    fn handle_rpc_response(&mut self, node_id: NodeId, rpc_id: u64, res: rpc::Response) {
+        // verify we know of the rpc_id
+        let req = RpcRequest(rpc_id, node_id);
+        if let Some(query_id) = self.active_rpc_requests.remove(&req) {
+            match res {
+                rpc::Response::Nodes { total, nodes } => {
+                    let mut current_response = self
+                        .active_nodes_responses
+                        .remove(&node_id)
+                        .unwrap_or_else(|| 1);
+                    if total < 20 && (current_response as u64) < total {
+                        current_response += 1;
+                        self.active_rpc_requests.insert(req, query_id.clone());
+                        self.active_nodes_responses
+                            .insert(node_id, current_response);
+                    } else {
+                        self.active_nodes_responses.remove(&node_id);
+                    }
+                    self.discovered(&query_id, &node_id, nodes);
+                }
+                _ => {} //TODO: Implement all RPC methods
             }
         }
     }
 }
 
-/// Wrapper around a discovered peer that associates a connection type to peer's ENR.
-#[derive(Debug, Clone)]
-struct DiscoveredPeer {
-    enr: Enr,
-    connection_type: ConnectionType,
-}
+// TODO: Group this logic
 
-/// The connection type associated with a discovered peer.
-#[derive(Debug, Clone)]
-pub enum ConnectionType {
-    /// A session has been established with the peer.
-    Connected,
-    /// An attempt to establish a session failed.
-    CouldNotConnect,
-    /// No session has been attempted.
-    NotConnected,
-}
-
-impl From<kbucket::EntryView<NodeId, Enr>> for DiscoveredPeer {
-    fn from(e: kbucket::EntryView<NodeId, Enr>) -> DiscoveredPeer {
-        DiscoveredPeer {
-            enr: e.node.value,
-            connection_type: match e.status {
-                NodeStatus::Connected => ConnectionType::Connected,
-                NodeStatus::Disconnected => ConnectionType::NotConnected,
-            },
+/// Sends a NODES response, given a list of found ENR's. This function splits the nodes up
+/// into multiple responses to ensure the response stays below the maximum packet size.
+fn send_nodes_response(
+    service: &mut SessionService,
+    dst: SocketAddr, // overwrites the ENR IP - we resend to the IP we received the request from
+    rpc_id: u64,
+    enr: &Enr,
+    nodes: Vec<EntryRefView<NodeId, Enr>>,
+) {
+    // build the NODES response
+    let mut to_send_nodes: Vec<Vec<Enr>> = Vec::new();
+    let mut total_size = 0;
+    let mut rpc_index = 0;
+    to_send_nodes.push(Vec::new());
+    for entry in nodes.into_iter() {
+        if entry.node.value.size() + total_size < MAX_PACKET_SIZE - 80 {
+            total_size += entry.node.value.size();
+            to_send_nodes[rpc_index].push(entry.node.value.clone());
+        } else {
+            total_size = entry.node.value.size();
+            to_send_nodes.push(vec![entry.node.value.clone()]);
+            rpc_index += 1;
         }
+    }
+
+    let responses: Vec<rpc::ProtocolMessage> = to_send_nodes
+        .into_iter()
+        .map(|nodes| rpc::ProtocolMessage {
+            id: rpc_id,
+            body: rpc::RpcType::Response(rpc::Response::Nodes {
+                total: rpc_index as u64,
+                nodes,
+            }),
+        })
+        .collect();
+
+    for response in responses {
+        service.send_message(enr, response, Some(dst));
     }
 }
 
@@ -521,9 +556,18 @@ where
             loop {
                 match self.service.poll() {
                     Async::Ready(event) => match event {
-                        SessionEvent::Message(msg) => {
-                            self.incomming_rpc(*msg);
-                        }
+                        SessionEvent::Message {
+                            src_id,
+                            src,
+                            message,
+                        } => match message.body {
+                            rpc::RpcType::Request(req) => {
+                                self.handle_rpc_request(src, src_id, message.id, req);
+                            }
+                            rpc::RpcType::Response(res) => {
+                                self.handle_rpc_response(src_id, message.id, res)
+                            }
+                        },
                         SessionEvent::UpdatedEnr(enr) => {
                             debug!("ENR updated: {}", enr);
                             self.add_enr(*enr);
@@ -591,7 +635,7 @@ where
             }
 
             if let Some((query_id, target, return_peer)) = waiting_query {
-                self.send_rpc(&query_id, &target, &return_peer);
+                self.send_query_rpc(&query_id, &target, &return_peer);
             } else if let Some(finished_query) = finished_query {
                 let result = self
                     .active_queries
@@ -623,7 +667,6 @@ pub enum Discv5Event {
     Discovered {
         enr_id: NodeId,
         addresses: Vec<Multiaddr>,
-        ty: ConnectionType,
     },
     EnrAdded {
         enr: Enr,

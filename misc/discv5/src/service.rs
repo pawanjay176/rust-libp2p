@@ -9,7 +9,7 @@ use std::io;
 use std::net::SocketAddr;
 use tokio_udp::UdpSocket;
 
-const MAX_PACKET_SIZE: usize = 1280;
+pub(crate) const MAX_PACKET_SIZE: usize = 1280;
 
 /// The main service that handles the transport. Specifically the UDP sockets and packet
 /// encoding/decoding.

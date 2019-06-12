@@ -114,23 +114,31 @@ impl SessionService {
         })
     }
 
-    /// Sends a message to a node given the nodes ENR. This function will handle establishing a
-    /// session and retrying requests on timeout.
+    /// Sends a message to a node given the node's ENR. This function will handle establishing a
+    /// session and retrying requests on timeout. An optional SocketAddr can be provided to
+    /// override sending the packet based on the node's ENR.
     pub fn send_message(
         &mut self,
         dst_enr: &Enr,
         message: ProtocolMessage,
+        socket_addr: Option<SocketAddr>,
     ) -> Result<(), Discv5Error> {
         // check for an established session
         let dst_id = dst_enr.node_id;
 
-        let dst = dst_enr.udp_socket().ok_or_else(|| {
-            warn!(
-                "Could not send message. ENR has no ip and udp port: {}",
-                dst_enr
-            );
-            Discv5Error::InvalidEnr
-        })?;
+        let dst = {
+            if let Some(socket) = socket_addr {
+                socket
+            } else {
+                dst_enr.udp_socket().ok_or_else(|| {
+                    warn!(
+                        "Could not send message. ENR has no ip and udp port: {}",
+                        dst_enr
+                    );
+                    Discv5Error::InvalidEnr
+                })?
+            }
+        };
 
         let session = match self.sessions.get(&dst_id) {
             Some(s) if s.established() => s,
@@ -491,8 +499,12 @@ impl SessionService {
 
         // we have received a new message. Notify the behaviour.
         debug!("Message received: {:?}", message);
-        self.events
-            .push_back(SessionEvent::Message(Box::new(message)));
+        let event = SessionEvent::Message {
+            src_id,
+            src,
+            message: Box::new(message),
+        };
+        self.events.push_back(event);
         Ok(())
     }
 
@@ -718,7 +730,11 @@ impl SessionService {
 /// The output from polling the `SessionSerivce`.
 pub enum SessionEvent {
     /// A message was received.
-    Message(Box<ProtocolMessage>),
+    Message {
+        src_id: NodeId,
+        src: SocketAddr,
+        message: Box<ProtocolMessage>,
+    },
 
     /// An ENR was updated for a node.
     UpdatedEnr(Box<Enr>),

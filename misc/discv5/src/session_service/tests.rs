@@ -48,7 +48,8 @@ mod tests {
             loop {
                 match delay.poll() {
                     Ok(Async::Ready(_)) => {
-                        let _ = sender_service.send_message(&receiver_enr, send_message.clone());
+                        let _ =
+                            sender_service.send_message(&receiver_enr, send_message.clone(), None);
                     }
                     Ok(Async::NotReady) | Err(_) => {}
                 }
@@ -78,7 +79,7 @@ mod tests {
                             auth_tag,
                         );
                     }
-                    SessionEvent::Message(message) => {
+                    SessionEvent::Message { message, .. } => {
                         assert_eq!(*message, receiver_send_message);
                         return Ok(Async::Ready(()));
                     }
@@ -137,8 +138,11 @@ mod tests {
                 match delay.poll() {
                     Ok(Async::Ready(_)) => {
                         for _ in 0..messages_to_send {
-                            let _ =
-                                sender_service.send_message(&receiver_enr, send_message.clone());
+                            let _ = sender_service.send_message(
+                                &receiver_enr,
+                                send_message.clone(),
+                                None,
+                            );
                         }
                     }
                     Ok(Async::NotReady) | Err(_) => {}
@@ -169,7 +173,7 @@ mod tests {
                             auth_tag,
                         );
                     }
-                    SessionEvent::Message(message) => {
+                    SessionEvent::Message { message, .. } => {
                         assert_eq!(*message, receiver_send_message);
                         message_count += 1;
                         if message_count == messages_to_send {

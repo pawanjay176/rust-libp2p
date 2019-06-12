@@ -165,7 +165,6 @@ where
             if let Some(applied) = table.apply_pending() {
                 applied_pending.push_back(applied)
             }
-            let table = &*table;
             table.iter().map(move |(n, status)| EntryRefView {
                 node: NodeRefView {
                     key: &n.key,
@@ -204,6 +203,31 @@ where
     /// consumed by calling this function.
     pub fn take_applied_pending(&mut self) -> Option<AppliedPending<TPeerId, TVal>> {
         self.applied_pending.pop_front()
+    }
+
+    /// Returns an iterator over the keys that are contained in a kbucket, specified by a log2 distance.
+    pub fn nodes_by_distance<'a>(
+        &'a mut self,
+        log2_distance: u64,
+    ) -> Vec<EntryRefView<'a, TPeerId, TVal>> {
+        if log2_distance > 0 && log2_distance < (NUM_BUCKETS as u64) {
+            let bucket = &mut self.buckets[log2_distance as usize];
+            if let Some(applied) = bucket.apply_pending() {
+                self.applied_pending.push_back(applied)
+            }
+            bucket
+                .iter()
+                .map(|(n, status)| {
+                    let node = NodeRefView {
+                        key: &n.key,
+                        value: &n.value,
+                    };
+                    EntryRefView { node, status }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Returns an iterator over the keys closest to `target`, ordered by
