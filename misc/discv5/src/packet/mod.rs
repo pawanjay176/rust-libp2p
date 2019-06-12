@@ -255,7 +255,7 @@ impl Packet {
     /// the magic byte sequence.
     pub fn decode(data: &[u8], magic_data: &[u8]) -> Result<Self, PacketError> {
         // ensure the packet is large enough to contain the correct headers
-        if data.len() < TAG_LENGTH + AUTH_TAG_LENGTH {
+        if data.len() < TAG_LENGTH + MAGIC_LENGTH {
             debug!("Packet length too small. Length: {}", data.len());
             return Err(PacketError::TooSmall);
         }
@@ -264,7 +264,9 @@ impl Packet {
         tag.clone_from_slice(&data[0..TAG_LENGTH]);
 
         // initially look for a WHOAREYOU packet
-        if &data[TAG_LENGTH..TAG_LENGTH + MAGIC_LENGTH] == magic_data {
+        if data.len() >= TAG_LENGTH + MAGIC_LENGTH
+            && &data[TAG_LENGTH..TAG_LENGTH + MAGIC_LENGTH] == magic_data
+        {
             return Packet::decode_whoareyou(tag, data);
         }
         // not a WHOAREYOU packet
@@ -307,6 +309,7 @@ pub enum PacketError {
 
 #[cfg(test)]
 mod tests {
+    extern crate hex;
     use super::*;
     use libp2p_core::identity::Keypair;
     use rand;
@@ -401,6 +404,14 @@ mod tests {
         let decoded_packet = Packet::decode(&encoded_packet, &tag).unwrap();
 
         assert_eq!(decoded_packet, packet);
+    }
+
+    #[test]
+    fn fuzzer_panics() {
+        let data = hex::decode("7bffff7098984867299898859898ffff9898ffffffffffffffffd1d1d1d1d1d1d18600ffffffffff8585858505ff00418585850585858585858585844185850000").unwrap();
+        let magic_data = data.clone();
+
+        Packet::decode(&data, &magic_data);
     }
 
 }
