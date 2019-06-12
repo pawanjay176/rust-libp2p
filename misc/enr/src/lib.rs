@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn fuzzer_panics() {
-        let data = hex::decode("db").unwrap();
+        let data = hex::decode("c10100837273619d9df79d9d9d9d9d9d9d9d9d9d9d9d9d439d010000009d9d9d9d9d9d9d9d9d80").unwrap();
 
         rlp::decode::<Enr>(&data);
     }
