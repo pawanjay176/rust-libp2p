@@ -264,7 +264,9 @@ impl Packet {
         tag.clone_from_slice(&data[0..TAG_LENGTH]);
 
         // initially look for a WHOAREYOU packet
-        if &data[TAG_LENGTH..TAG_LENGTH + MAGIC_LENGTH] == magic_data {
+        if data.len() >= TAG_LENGTH + MAGIC_LENGTH
+            && &data[TAG_LENGTH..TAG_LENGTH + MAGIC_LENGTH] == magic_data
+        {
             return Packet::decode_whoareyou(tag, data);
         }
         // not a WHOAREYOU packet
