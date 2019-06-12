@@ -1,5 +1,5 @@
 ///! The Authentication header associated with Discv5 Packets.
-use super::AuthTag;
+use super::{AuthTag, AUTH_TAG_LENGTH};
 use enr::Enr;
 // use libp2p_core::identity::PublicKey;
 use log::debug;
@@ -149,6 +149,9 @@ impl Decodable for AuthHeader {
         let auth_tag_bytes = decoded_list.pop().expect("List is long enough");
 
         let mut auth_tag: AuthTag = Default::default();
+        if auth_tag_bytes.len() != AUTH_TAG_LENGTH {
+            return Err(DecoderError::Custom("Invalid Authtag length"));
+        }
         auth_tag.clone_from_slice(&auth_tag_bytes);
 
         // currently only support gsm scheme
