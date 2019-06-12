@@ -195,15 +195,18 @@ impl Packet {
         }
 
         let enr_seq_bytes = decoded_list.pop().expect("List is long enough");
-        let mut enr_seq: [u8; 8] = Default::default();
-        enr_seq.clone_from_slice(&enr_seq_bytes);
-        let enr_seq = u64::from_be_bytes(enr_seq);
-
         let id_nonce_bytes = decoded_list.pop().expect("List is long enough");
+        let token_bytes = decoded_list.pop().expect("List is long enough");
+
+        if id_nonce_bytes.len() != ID_NONCE_LENGTH || token_bytes.len() != AUTH_TAG_LENGTH {
+            return Err(PacketError::InvalidByteSize);
+        }
+
+        let enr_seq = u64_from_be_vec(&enr_seq_bytes)?;
+
         let mut id_nonce: [u8; ID_NONCE_LENGTH] = Default::default();
         id_nonce.clone_from_slice(&id_nonce_bytes);
 
-        let token_bytes = decoded_list.pop().expect("List is long enough");
         let mut token: AuthTag = Default::default();
         token.clone_from_slice(&token_bytes);
 
@@ -301,12 +304,22 @@ impl Packet {
     }
 }
 
+fn u64_from_be_vec(data: &[u8]) -> Result<u64, PacketError> {
+    if data.len() > 8 {
+        return Err(PacketError::InvalidByteSize);
+    }
+    let mut val = [0u8; 8];
+    val[8 - data.len()..].copy_from_slice(data);
+    Ok(u64::from_be_bytes(val))
+}
+
 #[derive(Debug, Clone)]
 /// Types of packet errors.
 pub enum PacketError {
     UnknownFormat,
     UnknownPacket,
     TooSmall,
+    InvalidByteSize,
 }
 
 #[cfg(test)]
@@ -354,7 +367,7 @@ mod tests {
     #[test]
     fn encode_decode_whoareyou_packet() {
         //        let _ = simple_logger::init_with_level(log::Level::Debug);
-        let tag = hash256_to_fixed_array("test-tag");
+        let tag = hash256_to_fixed_array("88484"); // has 2 0 leading bytes.
         let magic = hash256_to_fixed_array("magic");
         let id_nonce: [u8; ID_NONCE_LENGTH] = rand::random();
         let token: [u8; AUTH_TAG_LENGTH] = rand::random();
