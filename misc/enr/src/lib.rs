@@ -457,7 +457,7 @@ impl Decodable for Enr {
             DecoderError::Custom("List decode fail")
         })?;
 
-        if decoded_list.len() % 2 != 0 {
+        if decoded_list.len() > 0 && decoded_list.len() % 2 != 0 {
             debug!("Failed to decode ENR. List size is not a multiple of 2.");
             return Err(DecoderError::Custom("List not a multiple of two"));
         }
