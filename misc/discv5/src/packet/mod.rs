@@ -260,7 +260,7 @@ impl Packet {
     /// the magic byte sequence.
     pub fn decode(data: &[u8], magic_data: &Magic) -> Result<Self, PacketError> {
         // ensure the packet is large enough to contain the correct headers
-        if data.len() < TAG_LENGTH + AUTH_TAG_LENGTH {
+        if data.len() < TAG_LENGTH + AUTH_TAG_LENGTH + 1 {
             debug!("Packet length too small. Length: {}", data.len());
             return Err(PacketError::TooSmall);
         }
@@ -424,10 +424,14 @@ mod tests {
 
     #[test]
     fn fuzzer_panics() {
-        let data = hex::decode("7bffff7098984867299898859898ffff9898ffffffffffffffffd1d1d1d1d1d1d18600ffffffffff8585858505ff00418585850585858585858585844185850000").unwrap();
-        let magic_data = data.clone();
+        let data = hex::decode("989898ffff00ff0d002d2dff67d6f22c9a3930303098989898850affff2e2900ffff0a000000000101512d67ffff880a7498989898ffff0200000000d6f22cff8c00000a2900ff0dff2900ff").unwrap();
 
-        Packet::decode(&data, &magic_data);
+        if data.len() > 32 {
+            let mut magic_data = [0u8; 32];
+            magic_data.copy_from_slice(&data[..32]);
+            Packet::decode(&data[32..], &magic_data);
+        }
+
     }
 
 }
