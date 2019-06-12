@@ -544,6 +544,8 @@ pub enum EnrError {
 
 #[cfg(test)]
 mod tests {
+    extern crate hex;
+
     use super::*;
     use std::net::Ipv4Addr;
 
@@ -692,5 +694,12 @@ mod tests {
             enr.multiaddr()[1],
             "/ip4/10.0.0.1/tcp/30303".parse().unwrap()
         );
+    }
+
+    #[test]
+    fn fuzzer_panics() {
+        let data = hex::decode("db").unwrap();
+
+        rlp::decode::<Enr>(&data);
     }
 }
