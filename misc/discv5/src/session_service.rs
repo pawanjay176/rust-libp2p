@@ -12,7 +12,7 @@
 //TODO: Document the Event structure and WHOAREYOU requests to the protocol layer.
 
 use super::packet::{
-    AuthHeader, AuthResponse, AuthTag, NodeId, Nonce, Packet, Tag, MAGIC_LENGTH, TAG_LENGTH,
+    AuthHeader, AuthResponse, AuthTag, Magic, NodeId, Nonce, Packet, Tag, TAG_LENGTH,
 };
 use super::service::Discv5Service;
 use crate::error::Discv5Error;
@@ -93,7 +93,7 @@ impl SessionService {
             let mut hasher = Sha256::new();
             hasher.input(enr.node_id);
             hasher.input(b"WHOAREYOU");
-            let mut magic = [0u8; MAGIC_LENGTH];
+            let mut magic: Magic = Default::default();
             magic.copy_from_slice(&hasher.result());
             magic
         };

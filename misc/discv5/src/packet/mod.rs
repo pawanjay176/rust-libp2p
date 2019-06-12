@@ -30,6 +30,8 @@ pub type Tag = [u8; TAG_LENGTH];
 pub type NodeId = [u8; NODE_ID_LENGTH];
 /// The nonce sent in a WHOAREYOU packet.
 pub type Nonce = [u8; ID_NONCE_LENGTH];
+/// The magic packet.
+pub type Magic = [u8; MAGIC_LENGTH];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Packet {
@@ -253,7 +255,7 @@ impl Packet {
 
     /// Decode raw bytes into a packet. The `magic` value (SHA2256(node-id, b"WHOAREYOU")) is passed as a parameter to check for
     /// the magic byte sequence.
-    pub fn decode(data: &[u8], magic_data: &[u8]) -> Result<Self, PacketError> {
+    pub fn decode(data: &[u8], magic_data: &Magic) -> Result<Self, PacketError> {
         // ensure the packet is large enough to contain the correct headers
         if data.len() < TAG_LENGTH + MAGIC_LENGTH {
             debug!("Packet length too small. Length: {}", data.len());
@@ -329,6 +331,7 @@ mod tests {
         //        let _ = simple_logger::init_with_level(log::Level::Debug);
         let tag = hash256_to_fixed_array("test-tag");
         let auth_tag: [u8; AUTH_TAG_LENGTH] = rand::random();
+        let random_magic: Magic = rand::random();
         let random_data: [u8; 44] = [17; 44];
 
         let packet = Packet::RandomPacket {
@@ -338,7 +341,7 @@ mod tests {
         };
 
         let encoded_packet = packet.encode();
-        let decoded_packet = Packet::decode(&encoded_packet, &random_data).unwrap();
+        let decoded_packet = Packet::decode(&encoded_packet, &random_magic).unwrap();
         let expected_packet = Packet::Message {
             tag,
             auth_tag,
