@@ -73,88 +73,92 @@ where
     #[inline]
     fn upgrade_inbound(self, socket: upgrade::Negotiated<TSocket>, _: Self::Info) -> Self::Future {
         upgrade::read_one_then(socket, self.max_transmit_size, (), |packet, ()| {
-            let mut rpc: rpc_proto::RPC = protobuf::parse_from_bytes(&packet)?;
-
-            let mut messages = Vec::with_capacity(rpc.get_publish().len());
-            for mut publish in rpc.take_publish().into_iter() {
-                messages.push(GossipsubMessage {
-                    source: PeerId::from_bytes(publish.take_from())
-                        .map_err(|_| GossipsubDecodeError::InvalidPeerId)?,
-                    data: publish.take_data(),
-                    sequence_number: publish.take_seqno(),
-                    topics: publish
-                        .take_topicIDs()
-                        .into_iter()
-                        .map(TopicHash::from_raw)
-                        .collect(),
-                });
-            }
-
-            let mut rpc_control = rpc.take_control();
-            let mut control_msgs = vec![];
-            // Collect the gossipsub control messages
-            let ihave_msgs: Vec<GossipsubControlAction> = rpc_control
-                .take_ihave()
-                .into_iter()
-                .map(|mut ihave| {
-                    GossipsubControlAction::IHave {
-                        topic_hash: TopicHash::from_raw(ihave.take_topicID()),
-                        // TODO: Potentially format the message ids better
-                        message_ids: ihave.take_messageIDs().into_vec(),
-                    }
-                })
-                .collect();
-
-            let iwant_msgs: Vec<GossipsubControlAction> = rpc_control
-                .take_iwant()
-                .into_iter()
-                .map(|mut iwant| {
-                    GossipsubControlAction::IWant {
-                        // TODO: Potentially format the message ids better
-                        message_ids: iwant.take_messageIDs().into_vec(),
-                    }
-                })
-                .collect();
-
-            let graft_msgs: Vec<GossipsubControlAction> = rpc_control
-                .take_graft()
-                .into_iter()
-                .map(|mut graft| GossipsubControlAction::Graft {
-                    topic_hash: TopicHash::from_raw(graft.take_topicID()),
-                })
-                .collect();
-
-            let prune_msgs: Vec<GossipsubControlAction> = rpc_control
-                .take_prune()
-                .into_iter()
-                .map(|mut prune| GossipsubControlAction::Prune {
-                    topic_hash: TopicHash::from_raw(prune.take_topicID()),
-                })
-                .collect();
-
-            control_msgs.extend(ihave_msgs);
-            control_msgs.extend(iwant_msgs);
-            control_msgs.extend(graft_msgs);
-            control_msgs.extend(prune_msgs);
-
-            Ok(GossipsubRpc {
-                messages,
-                subscriptions: rpc
-                    .take_subscriptions()
-                    .into_iter()
-                    .map(|mut sub| GossipsubSubscription {
-                        action: if sub.get_subscribe() {
-                            GossipsubSubscriptionAction::Subscribe
-                        } else {
-                            GossipsubSubscriptionAction::Unsubscribe
-                        },
-                        topic_hash: TopicHash::from_raw(sub.take_topicid()),
-                    })
-                    .collect(),
-                control_msgs,
-            })
+            proto_to_message(&packet)
         })
     }
+}
+
+fn proto_to_message(packet: &[u8]) -> Result<GossipsubRpc, GossipsubDecodeError> {
+    let mut rpc: rpc_proto::RPC = protobuf::parse_from_bytes(packet)?;
+
+    let mut messages = Vec::with_capacity(rpc.get_publish().len());
+    for mut publish in rpc.take_publish().into_iter() {
+        messages.push(GossipsubMessage {
+            source: PeerId::from_bytes(publish.take_from())
+                .map_err(|_| GossipsubDecodeError::InvalidPeerId)?,
+            data: publish.take_data(),
+            sequence_number: publish.take_seqno(),
+            topics: publish
+                .take_topicIDs()
+                .into_iter()
+                .map(TopicHash::from_raw)
+                .collect(),
+        });
+    }
+
+    let mut rpc_control = rpc.take_control();
+    let mut control_msgs = vec![];
+    // Collect the gossipsub control messages
+    let ihave_msgs: Vec<GossipsubControlAction> = rpc_control
+        .take_ihave()
+        .into_iter()
+        .map(|mut ihave| {
+            GossipsubControlAction::IHave {
+                topic_hash: TopicHash::from_raw(ihave.take_topicID()),
+                // TODO: Potentially format the message ids better
+                message_ids: ihave.take_messageIDs().into_vec(),
+            }
+        })
+        .collect();
+
+    let iwant_msgs: Vec<GossipsubControlAction> = rpc_control
+        .take_iwant()
+        .into_iter()
+        .map(|mut iwant| {
+            GossipsubControlAction::IWant {
+                // TODO: Potentially format the message ids better
+                message_ids: iwant.take_messageIDs().into_vec(),
+            }
+        })
+        .collect();
+
+    let graft_msgs: Vec<GossipsubControlAction> = rpc_control
+        .take_graft()
+        .into_iter()
+        .map(|mut graft| GossipsubControlAction::Graft {
+            topic_hash: TopicHash::from_raw(graft.take_topicID()),
+        })
+        .collect();
+
+    let prune_msgs: Vec<GossipsubControlAction> = rpc_control
+        .take_prune()
+        .into_iter()
+        .map(|mut prune| GossipsubControlAction::Prune {
+            topic_hash: TopicHash::from_raw(prune.take_topicID()),
+        })
+        .collect();
+
+    control_msgs.extend(ihave_msgs);
+    control_msgs.extend(iwant_msgs);
+    control_msgs.extend(graft_msgs);
+    control_msgs.extend(prune_msgs);
+
+    Ok(GossipsubRpc {
+        messages,
+        subscriptions: rpc
+            .take_subscriptions()
+            .into_iter()
+            .map(|mut sub| GossipsubSubscription {
+                action: if sub.get_subscribe() {
+                    GossipsubSubscriptionAction::Subscribe
+                } else {
+                    GossipsubSubscriptionAction::Unsubscribe
+                },
+                topic_hash: TopicHash::from_raw(sub.take_topicid()),
+            })
+            .collect(),
+        control_msgs,
+    })
 }
 
 /// Reach attempt interrupt errors.
