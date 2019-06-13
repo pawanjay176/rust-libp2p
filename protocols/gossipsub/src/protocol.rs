@@ -78,7 +78,7 @@ where
     }
 }
 
-fn proto_to_message(packet: &[u8]) -> Result<GossipsubRpc, GossipsubDecodeError> {
+pub fn proto_to_message(packet: &[u8]) -> Result<GossipsubRpc, GossipsubDecodeError> {
     let mut rpc: rpc_proto::RPC = protobuf::parse_from_bytes(packet)?;
 
     let mut messages = Vec::with_capacity(rpc.get_publish().len());
