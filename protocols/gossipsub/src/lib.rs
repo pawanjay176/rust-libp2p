@@ -132,4 +132,4 @@ mod rpc_proto;
 
 pub use self::gossipsub_config::{GossipsubConfig, GossipsubConfigBuilder};
 pub use self::layer::{Gossipsub, GossipsubEvent};
-pub use self::protocol::{GossipsubMessage, GossipsubRpc};
+pub use self::protocol::{GossipsubMessage, GossipsubRpc, proto_to_message};
