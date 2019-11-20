@@ -58,14 +58,11 @@ mod protocol;
 pub use error::NoiseError;
 pub use io::handshake::{Handshake, IdentityExchange, RemoteIdentity};
 pub use io::NoiseOutput;
-pub use protocol::{x25519::X25519, Protocol, ProtocolParams, IK, IX, XX};
-pub use protocol::{AuthenticKeypair, Keypair, KeypairIdentity, PublicKey, SecretKey};
+pub use protocol::{Keypair, AuthenticKeypair, KeypairIdentity, PublicKey, SecretKey};
+pub use protocol::{Protocol, ProtocolParams, x25519::X25519, IX, IK, XX, NoisePipes, XXfallback};
 
-use futures::{
-    future::{self, FutureResult},
-    Future,
-};
-use libp2p_core::{identity, InboundUpgrade, Negotiated, OutboundUpgrade, PeerId, UpgradeInfo};
+use futures::{future::{self, FutureResult}, Future};
+use libp2p_core::{identity, PeerId, UpgradeInfo, InboundUpgrade, OutboundUpgrade, Negotiated};
 use tokio_io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroize;
 
@@ -155,6 +152,48 @@ where
         }
     }
 }
+
+impl<C> NoiseConfig<NoisePipes, C>
+where
+    C: Protocol<C> + Zeroize
+{
+    /// Create a new `NoiseConfig` for the `Noise pipes` compound pattern (receiver side).
+    /// TODO: CHANGE documentation
+    /// Since the identity of the local node is known to the remote, this configuration
+    /// does not transmit a static DH public key or public identity key to the remote.
+    pub fn noise_pipes_dialer_xx(dh_keys: AuthenticKeypair<C>) -> Self {
+        NoiseConfig {
+            dh_keys,
+            params: C::params_xx(),
+            remote: (),
+            _marker: std::marker::PhantomData
+        }
+    }
+}
+
+impl<C> NoiseConfig<NoisePipes, C, (PublicKey<C>, identity::PublicKey)>
+where
+    C: Protocol<C> + Zeroize
+{
+    /// Create a new `NoiseConfig` for the `Noise pipes` compound pattern (receiver side).
+    /// TODO: CHANGE documentation
+    /// Since the identity of the local node is known to the remote, this configuration
+    /// does not transmit a static DH public key or public identity key to the remote.
+    pub fn noise_pipes_ik_dialer(
+        dh_keys: AuthenticKeypair<C>,
+        remote_id: identity::PublicKey,
+        remote_dh: PublicKey<C>
+    ) -> Self {
+        NoiseConfig {
+            dh_keys,
+            params: C::params_ik(),
+            remote: (remote_dh, remote_id),
+            _marker: std::marker::PhantomData
+        }
+    }
+}
+
+
 
 // Handshake pattern IX /////////////////////////////////////////////////////
 
@@ -264,6 +303,60 @@ where
     }
 }
 
+// Handshake pattern XXfallback /////////////////////////////////////////////////////
+// Implementation is exactly similar to XX pattern with roles reversed.
+impl<T, C> InboundUpgrade<T> for NoiseConfig<XXfallback, C>
+where
+    NoiseConfig<XXfallback, C>: UpgradeInfo,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: Protocol<C> + AsRef<[u8]> + Zeroize + Send + 'static,
+{
+    type Output = (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>);
+    type Error = NoiseError;
+    type Future = Handshake<Negotiated<T>, C>;
+
+    fn upgrade_inbound(self, socket: Negotiated<T>, _: Self::Info) -> Self::Future {
+        let session = self
+            .params
+            .into_builder()
+            .local_private_key(self.dh_keys.secret().as_ref())
+            .build_responder()
+            .map_err(NoiseError::from);
+        Handshake::rt15_responder(
+            socket,
+            session,
+            self.dh_keys.into_identity(),
+            IdentityExchange::Mutual,
+        )
+    }
+}
+
+impl<T, C> OutboundUpgrade<T> for NoiseConfig<XXfallback, C>
+where
+    NoiseConfig<XXfallback, C>: UpgradeInfo,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: Protocol<C> + AsRef<[u8]> + Zeroize + Send + 'static,
+{
+    type Output = (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>);
+    type Error = NoiseError;
+    type Future = Handshake<Negotiated<T>, C>;
+
+    fn upgrade_outbound(self, socket: Negotiated<T>, _: Self::Info) -> Self::Future {
+        let session = self
+            .params
+            .into_builder()
+            .local_private_key(self.dh_keys.secret().as_ref())
+            .build_initiator()
+            .map_err(NoiseError::from);
+        Handshake::rt15_initiator(
+            socket,
+            session,
+            self.dh_keys.into_identity(),
+            IdentityExchange::Mutual,
+        )
+    }
+}
+
 // Handshake pattern IK /////////////////////////////////////////////////////
 
 impl<T, C> InboundUpgrade<T> for NoiseConfig<IK, C>
@@ -320,6 +413,7 @@ where
         )
     }
 }
+
 
 // Authenticated Upgrades /////////////////////////////////////////////////////
 
@@ -413,5 +507,17 @@ where
                     _ => Err(NoiseError::AuthenticationFailed),
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_overload() {
+        let id = identity::Keypair::generate_ed25519();
+
+        let dh = Keypair::<X25519>::new().into_authentic(&id).unwrap();
+        let config = NoiseConfig::<NoisePipesXX, X25519, ()>::noise_pipes(dh);
     }
 }

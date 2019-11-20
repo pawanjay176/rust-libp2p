@@ -31,7 +31,7 @@ const NOISE_STATIC_KEY_SIGNATURE_PREFIX: &str = "noise-libp2p-static-key";
 
 /// The parameters of a Noise protocol, consisting of a choice
 /// for a handshake pattern as well as DH, cipher and hash functions.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProtocolParams(snow::params::NoiseParams);
 
 impl ProtocolParams {
@@ -53,6 +53,21 @@ pub enum IX {}
 #[derive(Debug, Clone)]
 pub enum XX {}
 
+/// Type tag for the XXfallback handshake pattern.
+#[derive(Debug, Clone)]
+pub enum XXfallback {}
+
+/// Type tag for the Noise pipes compound protocol.
+#[derive(Debug, Clone)]
+pub enum NoisePipes {
+    /// XX pattern for initial connection establishment.
+    XX,
+    /// IK pattern for when session keys are cached.
+    IK,
+    /// XXfallback pattern for when cached session keys are expired.
+    XXfallback,
+}
+
 /// A Noise protocol over DH keys of type `C`. The choice of `C` determines the
 /// protocol parameters for each handshake pattern.
 pub trait Protocol<C> {
@@ -62,7 +77,8 @@ pub trait Protocol<C> {
     fn params_ix() -> ProtocolParams;
     /// The protocol parameters for the XX handshake pattern.
     fn params_xx() -> ProtocolParams;
-
+    /// The protocol parameters for the XXfallback handshake pattern.
+    fn params_xxfallback() -> ProtocolParams;
     /// Construct a DH public key from a byte slice.
     fn public_from_bytes(s: &[u8]) -> Result<PublicKey<C>, NoiseError>;
 
@@ -275,14 +291,3 @@ impl rand::RngCore for Rng {
 impl rand::CryptoRng for Rng {}
 
 impl snow::types::Random for Rng {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_concat() {
-        let a: &[u8] = &[1, 2, 3, 4];
-        let msg = [NOISE_STATIC_KEY_SIGNATURE_PREFIX.as_bytes(), a].concat();
-        dbg!(msg);
-    }
-}

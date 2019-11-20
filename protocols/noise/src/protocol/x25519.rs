@@ -45,6 +45,10 @@ lazy_static! {
         .parse()
         .map(ProtocolParams)
         .expect("Invalid protocol name");
+    static ref PARAMS_XXFALLBACK: ProtocolParams = "Noise_XXfallback_25519_ChaChaPoly_SHA256"
+        .parse()
+        .map(ProtocolParams)
+        .expect("Invalid protocol name");
 }
 
 /// A X25519 key.
@@ -81,6 +85,15 @@ impl UpgradeInfo for NoiseConfig<XX, X25519> {
     }
 }
 
+impl UpgradeInfo for NoiseConfig<XXfallback, X25519> {
+    type Info = &'static [u8];
+    type InfoIter = std::iter::Once<Self::Info>;
+
+    fn protocol_info(&self) -> Self::InfoIter {
+        std::iter::once(b"/noise/xxfallback/25519/chachapoly/sha256/0.1.0")
+    }
+}
+
 impl UpgradeInfo for NoiseConfig<IK, X25519> {
     type Info = &'static [u8];
     type InfoIter = std::iter::Once<Self::Info>;
@@ -99,6 +112,24 @@ impl UpgradeInfo for NoiseConfig<IK, X25519, (PublicKey<X25519>, identity::Publi
     }
 }
 
+// impl UpgradeInfo for NoiseConfig<NoisePipes, X25519> {
+//     type Info = &'static [u8];
+//     type InfoIter = std::iter::Once<Self::Info>;
+
+//     fn protocol_info(&self) -> Self::InfoIter {
+//         std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
+//     }
+// }
+
+// impl UpgradeInfo for NoiseConfig<NoisePipes, X25519, (PublicKey<X25519>, identity::PublicKey)> {
+//     type Info = &'static [u8];
+//     type InfoIter = std::iter::Once<Self::Info>;
+
+//     fn protocol_info(&self) -> Self::InfoIter {
+//         std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
+//     }
+// }
+
 /// Noise protocols for X25519.
 impl Protocol<X25519> for X25519 {
     fn params_ik() -> ProtocolParams {
@@ -111,6 +142,10 @@ impl Protocol<X25519> for X25519 {
 
     fn params_xx() -> ProtocolParams {
         PARAMS_XX.clone()
+    }
+
+    fn params_xxfallback() -> ProtocolParams {
+        PARAMS_XXFALLBACK.clone()
     }
 
     fn public_from_bytes(bytes: &[u8]) -> Result<PublicKey<X25519>, NoiseError> {
