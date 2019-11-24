@@ -112,23 +112,23 @@ impl UpgradeInfo for NoiseConfig<IK, X25519, (PublicKey<X25519>, identity::Publi
     }
 }
 
-// impl UpgradeInfo for NoiseConfig<NoisePipes, X25519> {
-//     type Info = &'static [u8];
-//     type InfoIter = std::iter::Once<Self::Info>;
+impl UpgradeInfo for NoiseConfig<NoisePipes, X25519> {
+    type Info = &'static [u8];
+    type InfoIter = std::iter::Once<Self::Info>;
 
-//     fn protocol_info(&self) -> Self::InfoIter {
-//         std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
-//     }
-// }
+    fn protocol_info(&self) -> Self::InfoIter {
+        std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
+    }
+}
 
-// impl UpgradeInfo for NoiseConfig<NoisePipes, X25519, (PublicKey<X25519>, identity::PublicKey)> {
-//     type Info = &'static [u8];
-//     type InfoIter = std::iter::Once<Self::Info>;
+impl UpgradeInfo for NoiseConfig<NoisePipes, X25519, (PublicKey<X25519>, identity::PublicKey)> {
+    type Info = &'static [u8];
+    type InfoIter = std::iter::Once<Self::Info>;
 
-//     fn protocol_info(&self) -> Self::InfoIter {
-//         std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
-//     }
-// }
+    fn protocol_info(&self) -> Self::InfoIter {
+        std::iter::once(b"/noise/noisepipes/25519/chachapoly/sha256/0.1.0")
+    }
+}
 
 /// Noise protocols for X25519.
 impl Protocol<X25519> for X25519 {
