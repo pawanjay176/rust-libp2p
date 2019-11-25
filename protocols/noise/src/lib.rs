@@ -65,6 +65,8 @@ use futures::{
     future::{self, FutureResult},
     Future,
 };
+use libp2p_core::either::{EitherError, EitherFuture2, EitherOutput};
+use libp2p_core::upgrade::SelectUpgrade;
 use libp2p_core::{identity, InboundUpgrade, Negotiated, OutboundUpgrade, PeerId, UpgradeInfo};
 use tokio_io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroize;
@@ -469,6 +471,67 @@ where
             self.dh_keys.into_identity(),
             IdentityExchange::Mutual,
         )
+    }
+}
+
+pub struct NoiseReceiver<C: Zeroize>(SelectUpgrade<NoiseConfig<IK, C>, NoiseConfig<XX, C>>);
+
+impl<C> NoiseReceiver<C>
+where
+    C: Protocol<C> + Zeroize + Clone,
+{
+    fn new(dh_keys: AuthenticKeypair<C>) -> Self {
+        let upgrade = SelectUpgrade::new(
+            NoiseConfig::ik_listener(dh_keys.clone()),
+            NoiseConfig::xx(dh_keys),
+        );
+        NoiseReceiver(upgrade)
+    }
+}
+
+impl<C: Zeroize> UpgradeInfo for NoiseReceiver<C>
+where
+    NoiseConfig<IK, C>: UpgradeInfo,
+    NoiseConfig<XX, C>: UpgradeInfo,
+{
+    type Info = <SelectUpgrade<NoiseConfig<IK, C>, NoiseConfig<XX, C>> as UpgradeInfo>::Info;
+    type InfoIter =
+        <SelectUpgrade<NoiseConfig<IK, C>, NoiseConfig<XX, C>> as UpgradeInfo>::InfoIter;
+
+    fn protocol_info(&self) -> Self::InfoIter {
+        self.0.protocol_info()
+    }
+}
+
+impl<T, C> InboundUpgrade<T> for NoiseReceiver<C>
+where
+    NoiseConfig<IK, C>: UpgradeInfo
+        + InboundUpgrade<
+            T,
+            Output = (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>),
+            Error = NoiseError,
+        >,
+    NoiseConfig<XX, C>: UpgradeInfo
+        + InboundUpgrade<
+            T,
+            Output = (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>),
+            Error = NoiseError,
+        >,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: Protocol<C> + AsRef<[u8]> + Zeroize + Send + 'static,
+{
+    type Output = EitherOutput<
+        (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>),
+        (RemoteIdentity<C>, NoiseOutput<Negotiated<T>>),
+    >;
+    type Error = EitherError<NoiseError, NoiseError>;
+    type Future = EitherFuture2<
+        <NoiseConfig<protocol::IK, C> as InboundUpgrade<T>>::Future,
+        <NoiseConfig<protocol::XX, C> as InboundUpgrade<T>>::Future,
+    >;
+
+    fn upgrade_inbound(self, socket: Negotiated<T>, info: Self::Info) -> Self::Future {
+        self.0.upgrade_inbound(socket, info)
     }
 }
 
