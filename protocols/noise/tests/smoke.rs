@@ -22,10 +22,13 @@ use futures::{
     future::{self, Either},
     prelude::*,
 };
+use libp2p_core::either::{EitherError, EitherOutput};
 use libp2p_core::identity;
 use libp2p_core::transport::{ListenerEvent, Transport};
-use libp2p_core::upgrade::{self, apply_inbound, apply_outbound, Negotiated};
-use libp2p_noise::{Keypair, NoiseConfig, NoiseError, NoiseOutput, RemoteIdentity, X25519};
+use libp2p_core::upgrade::{self, apply_inbound, apply_outbound, Negotiated, UpgradeError};
+use libp2p_noise::{
+    Keypair, NoiseConfig, NoiseError, NoiseOutput, NoiseReceiver, RemoteIdentity, X25519,
+};
 use libp2p_tcp::{TcpConfig, TcpTransStream};
 use log::info;
 use quickcheck::QuickCheck;
@@ -176,6 +179,118 @@ fn ik_xx() {
         .max_tests(30)
         .quickcheck(prop as fn(Vec<u8>) -> bool)
 }
+
+#[test]
+fn noise_pipes() {
+    let _ = env_logger::try_init();
+    fn prop(message: Vec<u8>) -> bool {
+        let server_id = identity::Keypair::generate_ed25519();
+        let server_id_public = server_id.public();
+
+        let client_id = identity::Keypair::generate_ed25519();
+        let client_id_public = client_id.public();
+
+        let server_dh = Keypair::<X25519>::new().into_authentic(&server_id).unwrap();
+        let server_dh_public = server_dh.public().clone();
+        let server_transport = TcpConfig::new()
+            .and_then(move |output, endpoint| {
+                if endpoint.is_listener() {
+                    Either::A(
+                        apply_inbound(output, NoiseReceiver::new(server_dh.clone()))
+                            .map(|x| match x {
+                                EitherOutput::First(f) => f,
+                                EitherOutput::Second(s) => s,
+                            })
+                            .map_err(|x| match x {
+                                UpgradeError::Apply(e) => match e {
+                                    EitherError::A(e) => UpgradeError::Apply(e),
+                                    EitherError::B(e) => UpgradeError::Apply(e),
+                                },
+                                UpgradeError::Select(e) => UpgradeError::Select(e),
+                            }),
+                    )
+                } else {
+                    Either::B(apply_outbound(
+                        output,
+                        NoiseConfig::noise_pipes_xx_dialer(server_dh.clone()),
+                        upgrade::Version::V1,
+                    ))
+                }
+            })
+            .and_then(move |out, _| expect_identity(out, &client_id_public));
+
+        let client_dh = Keypair::<X25519>::new().into_authentic(&client_id).unwrap();
+        let server_id_public2 = server_id_public.clone();
+        let client_transport = TcpConfig::new()
+            .and_then(move |output, endpoint| {
+                if endpoint.is_listener() {
+                    Either::A(
+                        apply_inbound(output, NoiseReceiver::new(client_dh.clone()))
+                            .map(|x| match x {
+                                EitherOutput::First(f) => f,
+                                EitherOutput::Second(s) => s,
+                            })
+                            .map_err(|x| match x {
+                                UpgradeError::Apply(e) => match e {
+                                    EitherError::A(e) => UpgradeError::Apply(e),
+                                    EitherError::B(e) => UpgradeError::Apply(e),
+                                },
+                                UpgradeError::Select(e) => UpgradeError::Select(e),
+                            }),
+                    )
+                } else {
+                    Either::B(apply_outbound(
+                        output,
+                        NoiseConfig::noise_pipes_ik_dialer(
+                            client_dh.clone(),
+                            server_id_public,
+                            server_dh_public,
+                        ),
+                        upgrade::Version::V1,
+                    ))
+                }
+            })
+            .and_then(move |out, _| expect_identity(out, &server_id_public2));
+
+        run(server_transport, client_transport, message);
+        true
+    }
+    QuickCheck::new()
+        .max_tests(1)
+        .quickcheck(prop as fn(Vec<u8>) -> bool)
+}
+
+// #[test]
+// fn noise_pipes_ik() {
+//     let _ = env_logger::try_init();
+//     fn prop(message: Vec<u8>) -> bool {
+//         let server_id = identity::Keypair::generate_ed25519();
+//         let server_id_public = server_id.public();
+
+//         let client_id = identity::Keypair::generate_ed25519();
+//         let client_id_public = client_id.public();
+
+//         let server_dh = Keypair::<X25519>::new().into_authentic(&server_id).unwrap();
+//         let server_dh_public = server_dh.public().clone();
+//         let server_transport = TcpConfig::new()
+//             .and_then(move |output, endpoint| {
+//                 upgrade::apply(output, NoiseConfig::noise_pipes(server_dh, None), endpoint, upgrade::Version::V1)
+//             })
+//             .and_then(move |out, _| expect_identity(out, &client_id_public));
+
+//         let client_dh = Keypair::<X25519>::new().into_authentic(&client_id).unwrap();
+//         let server_id_public2 = server_id_public.clone();
+//         let client_transport = TcpConfig::new()
+//             .and_then(move |output, endpoint| {
+//                 upgrade::apply(output, NoiseConfig::noise_pipes(client_dh, server_dh_public), endpoint, upgrade::Version::V1)
+//             })
+//             .and_then(move |out, _| expect_identity(out, &server_id_public2));
+
+//         run(server_transport, client_transport, message);
+//         true
+//     }
+//     QuickCheck::new().max_tests(30).quickcheck(prop as fn(Vec<u8>) -> bool)
+// }
 
 type Output = (
     RemoteIdentity<X25519>,
