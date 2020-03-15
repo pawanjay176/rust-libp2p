@@ -1,3 +1,60 @@
+# Version 0.16.2 (2020-02-28)
+
+- Fixed yamux connections not properly closing and being stuck in the `CLOSE_WAIT` state.
+- Added a `websocket_transport()` function in `libp2p-wasm-ext`, behind a Cargo feature.
+- Fixed ambiguity in `IntoProtocolsHandler::select` vs `ProtocolsHandler::select` in the `NetworkBehaviour` custom derive.
+
+# Version 0.16.1 (2020-02-18)
+
+- Fixed wrong representation of `PeerId`s being used in `Kademlia::get_closest_peers`.
+- Implemented `FusedStream` for `Swarm`.
+
+# Version 0.16.0 (2020-02-13)
+
+- Removed the `Substream` associated type from the `ProtocolsHandler` trait. The type of the substream is now always `libp2p::swarm::NegotiatedSubstream`.
+- As a consequence of the previous change, most of the implementations of the `NetworkBehaviour` trait provided by libp2p (`Ping`, `Identify`, `Kademlia`, `Floodsub`, `Gossipsub`) have lost a generic parameter.
+- Removed the first generic parameter (the transport) from `Swarm` and `ExpandedSwarm`. The transport is now abstracted away in the internals of the swarm.
+- The `Send` and `'static` bounds are now enforced directly on the `ProtocolsHandler` trait and its associated `InboundUpgrade` and `OutboundUpgrade` implementations.
+- Modified `PeerId`s to compare equal across the identity and SHA256 hashes. As a consequence, the `Borrow` implementation of `PeerId` now always returns the bytes representation of a multihash with a SHA256 hash.
+- Modified libp2p-floodsub to no longer hash the topic. The new behaviour is now compatible with go-libp2p and js-libp2p, but is a breaking change with regards to rust-libp2p.
+- Added libp2p-pnet. It makes it possible to protect networks with a pre-shared key (PSK).
+- Modified the `poll_method` parameter of the `NetworkBehaviour` custom derive. The expected method now takes an additional parameter of type `impl PollParameters` to be consistent with the `NetworkBehaviour::poll` method.
+- libp2p-noise now compiles for WASM targets.
+- Changed libp2p-noise to grow its memory buffers dynamically. This should reduce the overall memory usage of connections that use the noise encryption.
+- Fixed libp2p-gossipsub to no longer close the connection if the inbound substream is closed by the remote.
+- All crates prefixed with `libp2p-` now use the same version number.
+- Added a new variant `ListenerEvent::Error` for listeners to report non-fatal errors. `libp2p-tcp` uses this variant to report errors that happen on remote sockets before they have been accepted and errors when trying to determine the local machine's IP address.
+
+# Version 0.15.0 (2020-01-24)
+
+- Added `libp2p-gossipsub`.
+- Added `SwarmBuilder::executor` to allow configuring which tasks executor to use.
+- Added `TokioTcpConfig` in `libp2p-tcp` and `TokioUdsConfig` in `libp2p-uds` behind `tokio` features. These structs use `tokio` and require a `tokio` runtime executor to be configured via `SwarmBuilder::executor`.
+- Changed the `OutboundUpgrade` and `InboundUpgrade` traits to no longer be passed a `Negotiated<C>` but just a `C`. The `Negotiated` is now in the trait bounds requirements of `ProtocolsHandler`.
+- Fixed `libp2p-wasm-ext` returning `Err(WouldBlock)` rather than `Pending`.
+- Fixed `libp2p-dns` not segregating DNS4 and DNS6.
+- Removed some unnecessary `Unpin` requirements on futures.
+- Changed `Mdns::new` to no longer be `async`.
+- Fixed `libp2p-kad` keeping connections alive when it shouldn't.
+- Fixed `InboundUpgrade` not always properly implemented on `NoiseConfig`.
+
+# Version 0.14.0-alpha.1 (2020-01-07)
+
+- Upgraded the crate to stable futures.
+- Use varints instead of fixed sized (4 byte) integers to delimit plaintext 2.0 messages to align implementation with the specification.
+- Refactored the `core::upgrade` module to provide async functions.
+- Changed the `Stream` trait implementation of `Swarm` to no longer return a `Result`.
+- Added the `Swarm::next` and `Swarm::next_event` functions and the `SwarmEvent` enum.
+- Changed `ProtocolsHandler::poll` to no longer return an error. Instead, `ProtocolsHandlerEvent` has a new `Close` variant which corresponds to what an error represented before.
+- Changed all the traits that have a `poll` function (i.e. `NetworkBehaviour`, `ProtocolsHandler`, `NodeHandler`) to have an additional `&mut Context` parameter, to reflect the changes in the `Future` trait.
+- Revamped the API of `libp2p_websockets::framed`.
+- Added protocol string to `Error::UnknownProtocolString`.
+
+# Version 0.13.2 (2020-01-02)
+
+- Fixed the `libp2p-noise` handshake not flushing the underlying stream before waiting for a response.
+- Fixed semver issue with the `protobuf` crate.
+
 # Version 0.13.1 (2019-11-13)
 
 - Maintenance release to bump dependencies and deal with an accidental breaking change in multihash 0.1.4.
