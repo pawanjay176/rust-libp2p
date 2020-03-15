@@ -25,11 +25,12 @@ use crate::Discv5Config;
 use enr::{CombinedKey, Enr, EnrError, EnrKey, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
-use libp2p_core::ConnectedPoint;
+use futures::StreamExt;
+use libp2p_core::connection::ConnectionId;
 use libp2p_core::{
     identity::Keypair,
     multiaddr::{Multiaddr, Protocol},
-    PeerId,
+    ConnectedPoint, PeerId,
 };
 use libp2p_swarm::{
     protocols_handler::{DummyProtocolsHandler, ProtocolsHandler},
@@ -40,9 +41,10 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::net::SocketAddr;
+use std::task::{self, Poll};
 use std::{marker::PhantomData, time::Duration};
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_timer::Interval;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::{self, Interval};
 
 mod ip_vote;
 mod query_info;
@@ -118,7 +120,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// `local_enr` is the `ENR` representing the local node. This contains node identifying information, such
     /// as IP addresses and ports which we wish to broadcast to other nodes via this discovery
     /// mechanism. The `listen_socket` determines which UDP socket address the behaviour will listen on.
-    pub fn new(
+    pub async fn new(
         local_enr: Enr<CombinedKey>,
         keypair: Keypair,
         config: Discv5Config,
@@ -153,7 +155,8 @@ impl<TSubstream> Discv5<TSubstream> {
         };
 
         // build the sesison service
-        let service = SessionService::new(local_enr, enr_key, listen_socket, config.clone())?;
+        let service =
+            SessionService::new(local_enr, enr_key, listen_socket, config.clone()).await?;
 
         Ok(Discv5 {
             events: SmallVec::new(),
@@ -878,7 +881,7 @@ impl<TSubstream> Discv5<TSubstream> {
         self.connection_updated(node_id.clone(), Some(enr), NodeStatus::Connected);
         // send an initial ping and start the ping interval
         self.send_ping(&node_id);
-        let interval = Interval::new_interval(self.config.ping_interval);
+        let interval = time::interval(self.config.ping_interval);
         self.connected_peers.insert(node_id, interval);
     }
 
@@ -943,9 +946,9 @@ impl<TSubstream> Discv5<TSubstream> {
 
 impl<TSubstream> NetworkBehaviour for Discv5<TSubstream>
 where
-    TSubstream: AsyncRead + AsyncWrite,
+    TSubstream: AsyncRead + AsyncWrite + Send + 'static,
 {
-    type ProtocolsHandler = DummyProtocolsHandler<TSubstream>;
+    type ProtocolsHandler = DummyProtocolsHandler;
     type OutEvent = Discv5Event;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
@@ -984,25 +987,27 @@ where
         }
     }
 
+    // no libp2p discv5 events - event originate from the session_service.
+    fn inject_event(
+        &mut self,
+        _: PeerId,
+        _: ConnectionId,
+        _ev: <Self::ProtocolsHandler as ProtocolsHandler>::OutEvent,
+    ) {
+        void::unreachable(_ev)
+    }
+
     // ignore libp2p connections/streams
     fn inject_connected(&mut self, _: PeerId, _: ConnectedPoint) {}
 
     // ignore libp2p connections/streams
     fn inject_disconnected(&mut self, _: &PeerId, _: ConnectedPoint) {}
 
-    // no libp2p discv5 events - event originate from the session_service.
-    fn inject_node_event(
-        &mut self,
-        _: PeerId,
-        _ev: <Self::ProtocolsHandler as ProtocolsHandler>::OutEvent,
-    ) {
-        void::unreachable(_ev)
-    }
-
     fn poll(
         &mut self,
+        cx: &mut task::Context,
         _params: &mut impl PollParameters,
-    ) -> Async<
+    ) -> Poll<
         NetworkBehaviourAction<
             <Self::ProtocolsHandler as ProtocolsHandler>::InEvent,
             Self::OutEvent,
@@ -1010,7 +1015,7 @@ where
     > {
         loop {
             // Process events from the session service
-            while let Async::Ready(event) = self.service.poll() {
+            while let Poll::Ready(event) = self.service.poll_unpin(cx) {
                 match event {
                     SessionEvent::Established(enr) => {
                         self.inject_session_established(enr);
@@ -1055,7 +1060,7 @@ where
 
             // Drain queued events
             if !self.events.is_empty() {
-                return Async::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
+                return Poll::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
             }
             self.events.shrink_to_fit();
 
@@ -1065,7 +1070,7 @@ where
                     node_id: entry.inserted.into_preimage(),
                     replaced: entry.evicted.map(|n| n.key.into_preimage()),
                 };
-                return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
+                return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
             }
 
             // Handle active queries
@@ -1109,14 +1114,14 @@ where
                                 .filter_map(|p| self.find_enr(&p).and_then(|p| Some(p.peer_id())))
                                 .collect(),
                         };
-                        return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
+                        return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
                     }
                 }
             } else {
                 // check for ping intervals
                 let mut to_send_ping = Vec::new();
                 for (node_id, interval) in self.connected_peers.iter_mut() {
-                    while let Ok(Async::Ready(_)) = interval.poll() {
+                    while let Poll::Ready(Some(_)) = interval.poll_next_unpin(cx) {
                         to_send_ping.push(node_id.clone());
                     }
                 }
@@ -1126,7 +1131,7 @@ where
                     self.send_ping(&id);
                 }
 
-                return Async::NotReady;
+                return Poll::Pending;
             }
         }
     }

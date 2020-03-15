@@ -22,14 +22,17 @@ use crate::error::Discv5Error;
 use crate::packet::{AuthHeader, AuthTag, Magic, Nonce, Packet, Tag, TAG_LENGTH};
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
+use core::pin::Pin;
 use enr::{CombinedKey, Enr, EnrError, NodeId};
 use futures::prelude::*;
+use futures::{Future, FutureExt};
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::default::Default;
 use std::net::SocketAddr;
+use std::task::{self, Poll};
 
 mod tests;
 mod timed_requests;
@@ -72,7 +75,7 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(
+    pub async fn new(
         enr: Enr<CombinedKey>,
         key: enr::CombinedKey,
         listen_socket: SocketAddr,
@@ -96,6 +99,7 @@ impl SessionService {
             pending_messages: HashMap::default(),
             sessions: TimedSessions::new(config.session_establish_timeout),
             service: Discv5Service::new(listen_socket, magic)
+                .await
                 .map_err(|e| Discv5Error::Error(format!("{:?}", e)))?,
             config,
         })
@@ -661,7 +665,7 @@ impl SessionService {
     }
 
     /// The heartbeat which checks for timeouts and reports back failed RPC requests/sessions.
-    fn check_timeouts(&mut self) {
+    fn check_timeouts(&mut self, cx: &mut task::Context<'_>) {
         // remove expired requests/sessions
         // log pending request timeouts
         // TODO: Split into own task, to be called only when timeouts are required
@@ -670,7 +674,9 @@ impl SessionService {
         let pending_messages_ref = &mut self.pending_messages;
         let events_ref = &mut self.events;
 
-        while let Ok(Async::Ready(Some((dst, mut request)))) = self.pending_requests.poll() {
+        while let Poll::Ready(Some(Ok((dst, mut request)))) =
+            self.pending_requests.poll_next_unpin(cx)
+        {
             let node_id = request.dst_id.clone();
             if request.retries >= self.config.request_retries {
                 // the RPC has expired
@@ -713,7 +719,7 @@ impl SessionService {
         // This is expensive, as it must loop through outgoing requests to check no request exists
         // for a given node id.
         let pending_requests_ref = &self.pending_requests;
-        while let Ok(Async::Ready(Some((node_id, session)))) = self.sessions.poll() {
+        while let Poll::Ready(Some(Ok((node_id, session)))) = self.sessions.poll_next_unpin(cx) {
             if pending_requests_ref.exists(|req| req.dst_id == node_id) {
                 // add the session back in with the current request timeout
                 self.sessions
@@ -729,17 +735,24 @@ impl SessionService {
             }
         }
     }
+}
 
-    pub fn poll(&mut self) -> Async<SessionEvent> {
+/// Note: `poll` was a struct impl and not a Future trait impl
+/// Not really sure why it was so before.
+impl Future for SessionService {
+    type Output = SessionEvent;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        // let session_service = self.get_mut();
         loop {
             // process any events if necessary
             if let Some(event) = self.events.pop_front() {
-                return Async::Ready(event);
+                return Poll::Ready(event);
             }
 
             // poll the discv5 service
-            match self.service.poll() {
-                Async::Ready((src, packet)) => {
+            match self.service.poll_unpin(cx) {
+                Poll::Ready((src, packet)) => {
                     match packet {
                         Packet::WhoAreYou {
                             token,
@@ -767,13 +780,14 @@ impl SessionService {
                         Packet::RandomPacket { .. } => {} // this will not be decoded.
                     }
                 }
-                Async::NotReady => break,
+                Poll::Pending => break,
             }
         }
 
         // check for timeouts
-        self.check_timeouts();
-        Async::NotReady
+        // TODO: does passing the cx cause issues somehow?
+        self.check_timeouts(cx);
+        Poll::Pending
     }
 }
 

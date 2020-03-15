@@ -4,11 +4,13 @@
 //! `TimedRequests` which provides expired requests when polled.
 
 use crate::session_service::Request;
-use futures::{Async, Poll, Stream};
+use core::pin::Pin;
+use futures::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::task::{self, Poll};
 use std::time::Duration;
-use tokio_timer::{delay_queue, DelayQueue};
+use tokio::time::{delay_queue, DelayQueue};
 
 /// A collection of requests that have an associated timeout.
 pub struct TimedRequests {
@@ -134,29 +136,29 @@ impl TimedRequests {
 }
 
 impl Stream for TimedRequests {
-    type Item = (SocketAddr, Request);
-    type Error = &'static str;
+    type Item = Result<(SocketAddr, Request), &'static str>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.timeouts.poll() {
-            Ok(Async::Ready(Some(timeout_index))) => {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context) -> Poll<Option<Self::Item>> {
+        let timed_request = self.get_mut();
+        match timed_request.timeouts.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(timeout_index))) => {
                 let timeout_index = timeout_index.into_inner();
                 let dst = timeout_index.dst;
 
-                if let Some(requests) = self.requests.get_mut(&dst) {
+                if let Some(requests) = timed_request.requests.get_mut(&dst) {
                     if let Some(pos) = requests
                         .iter()
                         .position(|r| r.request_key == timeout_index.request_key)
                     {
                         let request = requests.remove(pos).request;
-                        return Ok(Async::Ready(Some((dst, request))));
+                        return Poll::Ready(Some(Ok((dst, request))));
                     }
                 }
-                Err("Timed out request did not exist")
+                Poll::Ready(Some(Err("Timed out request did not exist")))
             }
-            Ok(Async::Ready(None)) => Ok(Async::Ready(None)),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(_) => Err("Request delay queue error"),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Err(_))) => Poll::Ready(Some(Err("Request delay queue error"))),
         }
     }
 }
