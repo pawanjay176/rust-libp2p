@@ -38,9 +38,11 @@ use libp2p::discv5::{enr, Discv5, Discv5Config, Discv5Event};
 use libp2p::identity;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     // if there is an address specified use it
@@ -102,7 +104,7 @@ fn main() {
     }
 
     // unused transport for building a swarm
-    let transport = libp2p::build_development_transport(keypair.clone());
+    let transport = libp2p::build_development_transport(keypair.clone()).unwrap();
 
     // default configuration
     let config = Discv5Config::default();
@@ -111,7 +113,10 @@ fn main() {
     let socket_addr = SocketAddr::new(address.into(), port);
 
     // construct the discv5 swarm, initializing an unused transport layer
-    let discv5 = Discv5::new(enr, keypair.clone(), config, socket_addr).unwrap();
+    let discv5 = Discv5::new(enr, keypair.clone(), config, socket_addr)
+        .await
+        .unwrap();
+
     let mut swarm = libp2p::Swarm::new(transport, discv5, keypair.public().into_peer_id());
 
     // if we know of another peer's ENR, add it known peers
@@ -133,13 +138,13 @@ fn main() {
     swarm.find_node(target_random_node_id);
 
     // construct a 30 second interval to search for new peers.
-    let mut query_interval = tokio::timer::Interval::new_interval(Duration::from_secs(10));
+    let mut query_interval = tokio::time::interval(Duration::from_secs(10));
 
     // Kick it off!
-    tokio::run(futures::future::poll_fn(move || -> Result<_, ()> {
+    let fut = future::poll_fn(move |cx: &mut Context| -> Poll<()> {
         loop {
             // start a query if it's time to do so
-            while let Ok(Async::Ready(_)) = query_interval.poll() {
+            while let Poll::Ready(_) = query_interval.poll_next_unpin(cx) {
                 // pick a random node target
                 let target_random_node_id = enr::NodeId::random();
                 println!("Connected Peers: {}", swarm.connected_peers());
@@ -148,8 +153,8 @@ fn main() {
                 swarm.find_node(target_random_node_id);
             }
 
-            match swarm.poll().expect("Error while polling swarm") {
-                Async::Ready(Some(event)) => match event {
+            match swarm.poll_next_unpin(cx) {
+                Poll::Ready(Some(event)) => match event {
                     Discv5Event::FindNodeResult { closer_peers, .. } => {
                         if !closer_peers.is_empty() {
                             println!("Query Completed. Nodes found:");
@@ -162,10 +167,12 @@ fn main() {
                     }
                     _ => (),
                 },
-                Async::Ready(None) | Async::NotReady => break,
+                Poll::Ready(None) | Poll::Pending => break,
             }
         }
 
-        Ok(Async::NotReady)
-    }));
+        Poll::Pending
+    });
+
+    fut.await;
 }

@@ -14,7 +14,7 @@ fn init() {
 #[tokio::test]
 // Tests the construction and sending of a simple message
 async fn simple_session_message() {
-    env_logger::init();
+    init();
 
     let sender_port = 5000;
     let receiver_port = 5001;

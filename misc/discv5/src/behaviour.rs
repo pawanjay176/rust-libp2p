@@ -24,7 +24,6 @@ use crate::session_service::{SessionEvent, SessionService};
 use crate::Discv5Config;
 use enr::{CombinedKey, Enr, EnrError, EnrKey, NodeId};
 use fnv::FnvHashMap;
-use futures::prelude::*;
 use futures::StreamExt;
 use libp2p_core::connection::ConnectionId;
 use libp2p_core::{
@@ -42,8 +41,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::net::SocketAddr;
 use std::task::{self, Poll};
-use std::{marker::PhantomData, time::Duration};
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::time::Duration;
 use tokio::time::{self, Interval};
 
 mod ip_vote;
@@ -91,7 +89,6 @@ pub struct Discv5 {
 
     /// Main discv5 UDP service that establishes sessions with peers.
     service: SessionService,
-
 }
 
 /// For multiple responses to a FindNodes request, this struct keeps track of the request count
@@ -941,8 +938,7 @@ impl Discv5 {
     }
 }
 
-impl NetworkBehaviour for Discv5
-{
+impl NetworkBehaviour for Discv5 {
     type ProtocolsHandler = DummyProtocolsHandler;
     type OutEvent = Discv5Event;
 

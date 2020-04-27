@@ -4,14 +4,11 @@
 //! messages. These messages are defined in the `Packet` module.
 
 use super::packet::{Packet, MAGIC_LENGTH};
-use core::pin::Pin;
-use futures::Future;
 use log::debug;
 use std::io;
 use std::net::SocketAddr;
 use std::task::{self, Poll};
 use tokio::net::UdpSocket;
-use tokio::pin;
 
 pub(crate) const MAX_PACKET_SIZE: usize = 1280;
 
