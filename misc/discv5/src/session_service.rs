@@ -285,12 +285,17 @@ impl SessionService {
         auth_tag: AuthTag,
     ) {
         // If a WHOAREYOU is already sent or a session is already established, ignore this request.
-        match self.sessions.get(node_id) {
-            Some(s) if s.trusted_established() || s.is_whoareyou_sent() => {
+        // However if a random packet was sent with a known ENR and this request has no known
+        // ENR. Use the ENR of the previously established Session.
+        let mut remote_enr = remote_enr;
+        if let Some(prev_session) = self.sessions.get(node_id) {
+            if prev_session.trusted_established() || prev_session.is_whoareyou_sent() {
                 warn!("Session exists. WhoAreYou packet not sent");
                 return;
             }
-            _ => {}
+            if remote_enr.is_none() && prev_session.remote_enr().is_some() {
+                remote_enr = prev_session.remote_enr().clone();
+            }
         }
 
         debug!("Sending WHOAREYOU packet to: {}", node_id);
@@ -349,29 +354,44 @@ impl SessionService {
             warn!("Received a WHOAREYOU packet without having an established session.")
         })?;
 
+        // We should never receive a WHOAREYOU request, that matches an outgoing request AND have a
+        // session that is in a WHOAREYOU_SENT state. If this is the case, drop the packet.
+        if session.is_whoareyou_sent() {
+            error!("Received a WHOAREYOU packet whilst in a WHOAREYOU session state. Source: {}, node: {}", src, src_id);
+            return Ok(());
+        }
+
         // Determine which message to send back. A WHOAREYOU could refer to the random packet
         // sent during an establishing a connection, or their session has expired on one of our
         // sent messages and we need to re-encrypt it.
         let message = {
-            if let Packet::RandomPacket { .. } = req.packet {
-                // get the messages that are waiting for an established session
-                let messages = self
-                    .pending_messages
-                    .get_mut(&src_id)
-                    .ok_or_else(|| warn!("No pending messages found for WHOAREYOU request."))?;
+            match req.packet {
+                Packet::RandomPacket { .. } => {
+                    // get the messages that are waiting for an established session
+                    let messages = self
+                        .pending_messages
+                        .get_mut(&src_id)
+                        .ok_or_else(|| warn!("No pending messages found for WHOAREYOU request."))?;
 
-                if messages.is_empty() {
-                    // This could happen for an established connection and another peer (from the
-                    // the same socketaddr) sends a WHOAREYOU packet
-                    debug!("No pending messages found for WHOAREYOU request.");
+                    if messages.is_empty() {
+                        // This could happen for an established connection and another peer (from the
+                        // the same socketaddr) sends a WHOAREYOU packet
+                        debug!("No pending messages found for WHOAREYOU request.");
+                        return Err(());
+                    }
+                    // select the first message in the queue
+                    messages.remove(0)
+                }
+                Packet::WhoAreYou { .. } => {
+                    // a WhoAreYou packet was received in response to a WHOAREYOU.
+                    warn!("A WHOAREYOU packet was received in response to a WHOAREYOU. Dropping packet and marking messages as failed");
                     return Err(());
                 }
-                // select the first message in the queue
-                messages.remove(0)
-            } else {
-                // re-send the original message
-                req.message
-                    .expect("All non-random requests must have an unencrypted message")
+                _ => {
+                    // re-send the original message
+                    req.message
+                        .expect("All non-random requests must have an unencrypted message")
+                }
             }
         };
 
@@ -528,14 +548,34 @@ impl SessionService {
             events_ref.push_back(event);
         })?;
 
-        // if we have sent a random packet, upgrade to a WhoAreYou request
+        // If the session has not been established, we cannot decrypt the message. For now we
+        // proceed with trying to generate a handshake and drop the current received message.
+
+        // There are two pre-established session states. RandomPacket set, or a WhoAreYou packet
+        // sent.
         if session.is_random_sent() {
+            // We have sent a RandomPacket and are expecting a WhoAreYou in response but received a
+            // regular message. This can happen if a session has locally dropped. Instead of
+            // waiting for the WhoAreYou response, we drop the current pending RandomPacket request
+            // and upgrade the session to a WhoAreYou session.
+            debug!("Old message received for non-established session. Upgrading to WhoAreYou. Source: {}, node: {}", src, src_id);
+            if self
+                .pending_requests
+                .remove(&src, |req| req.packet.is_random())
+                .is_none()
+            {
+                warn!(
+                    "No random packet pending for a random session. Source: {}, node: {}",
+                    src, src_id
+                );
+            }
             let event = SessionEvent::WhoAreYouRequest {
                 src,
                 src_id: src_id.clone(),
                 auth_tag,
             };
             self.events.push_back(event);
+            return Ok(());
         }
         // return if we are awaiting a WhoAreYou packet
         else if session.is_whoareyou_sent() {
