@@ -735,15 +735,8 @@ impl SessionService {
             }
         }
     }
-}
 
-/// Note: `poll` was a struct impl and not a Future trait impl
-/// Not really sure why it was so before.
-impl Future for SessionService {
-    type Output = SessionEvent;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        // let session_service = self.get_mut();
+    pub fn poll(&mut self, cx: &mut task::Context<'_>) -> Poll<SessionEvent> {
         loop {
             // process any events if necessary
             if let Some(event) = self.events.pop_front() {
@@ -751,7 +744,7 @@ impl Future for SessionService {
             }
 
             // poll the discv5 service
-            match self.service.poll_unpin(cx) {
+            match self.service.poll(cx) {
                 Poll::Ready((src, packet)) => {
                     match packet {
                         Packet::WhoAreYou {
@@ -780,7 +773,9 @@ impl Future for SessionService {
                         Packet::RandomPacket { .. } => {} // this will not be decoded.
                     }
                 }
-                Poll::Pending => break,
+                Poll::Pending => {
+                    break;
+                }
             }
         }
 

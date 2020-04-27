@@ -5,16 +5,16 @@ use enr::EnrBuilder;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::prelude::*;
+use tokio::time::timeout;
 
 fn init() {
     let _ = env_logger::builder().is_test(true).try_init();
 }
 
-#[test]
+#[tokio::test]
 // Tests the construction and sending of a simple message
-fn simple_session_message() {
-    init();
+async fn simple_session_message() {
+    env_logger::init();
 
     let sender_port = 5000;
     let receiver_port = 5001;
@@ -42,13 +42,16 @@ fn simple_session_message() {
         sender_enr.udp_socket().unwrap(),
         config.clone(),
     )
+    .await
     .unwrap();
+
     let mut receiver_service = SessionService::new(
         receiver_enr.clone(),
         key2,
         receiver_enr.udp_socket().unwrap(),
         config,
     )
+    .await
     .unwrap();
 
     let send_message = ProtocolMessage {
@@ -58,23 +61,21 @@ fn simple_session_message() {
 
     let receiver_send_message = send_message.clone();
 
-    let _ = sender_service.send_request(&receiver_enr, send_message);
+    let _ = sender_service
+        .send_request(&receiver_enr, send_message)
+        .unwrap();
 
-    let sender = future::poll_fn(move || -> Poll<(), ()> {
+    let sender = async {
         loop {
-            match sender_service.poll() {
-                Async::Ready(_) => {}
-                Async::NotReady => return Ok(Async::NotReady),
-            };
+            let fut = |cx: &mut task::Context<'_>| sender_service.poll(cx);
+            let _ = future::poll_fn(fut).await;
         }
-    });
+    };
 
-    let receiver = future::poll_fn(move || -> Poll<(), ()> {
+    let receiver = async {
         loop {
-            let message = match receiver_service.poll() {
-                Async::Ready(message) => message,
-                Async::NotReady => return Ok(Async::NotReady),
-            };
+            let fut = |cx: &mut task::Context<'_>| receiver_service.poll(cx);
+            let message = future::poll_fn(fut).await;
 
             match message {
                 SessionEvent::WhoAreYouRequest { src, auth_tag, .. } => {
@@ -89,29 +90,27 @@ fn simple_session_message() {
                     );
                 }
                 SessionEvent::Message { message, .. } => {
+                    dbg!(&message);
                     assert_eq!(*message, receiver_send_message);
-                    return Ok(Async::Ready(()));
+                    break;
                 }
                 _ => {}
             }
         }
-    });
+    };
 
+    let future = futures::future::select(Box::pin(sender), Box::pin(receiver));
     let test_result = Arc::new(Mutex::new(true));
     let thread_result = test_result.clone();
-    tokio::run(
-        sender
-            .select(receiver)
-            .timeout(Duration::from_millis(100))
-            .map_err(move |_| *thread_result.lock().unwrap() = false)
-            .map(|_| ()),
-    );
+    if let Err(_) = timeout(Duration::from_millis(100), future).await {
+        *thread_result.lock().unwrap() = false;
+    }
     assert!(*test_result.lock().unwrap());
 }
 
-#[test]
+#[tokio::test]
 // Tests sending multiple messages on an encrypted session
-fn multiple_messages() {
+async fn multiple_messages() {
     init();
     let sender_port = 5002;
     let receiver_port = 5003;
@@ -136,6 +135,7 @@ fn multiple_messages() {
         sender_enr.udp_socket().unwrap(),
         Discv5Config::default(),
     )
+    .await
     .unwrap();
     let mut receiver_service = SessionService::new(
         receiver_enr.clone(),
@@ -143,6 +143,7 @@ fn multiple_messages() {
         receiver_enr.udp_socket().unwrap(),
         Discv5Config::default(),
     )
+    .await
     .unwrap();
 
     let send_message = ProtocolMessage {
@@ -161,34 +162,38 @@ fn multiple_messages() {
 
     let receiver_send_message = send_message.clone();
 
-    let messages_to_send = 5;
+    let messages_to_send: usize = 5;
 
     // sender to send the first message then await for the session to be established
     let _ = sender_service.send_request(&receiver_enr, send_message.clone());
 
-    let mut message_count = 0;
+    let mut message_count: usize = 0;
 
-    let sender = future::poll_fn(move || -> Poll<(), ()> {
+    let sender = async {
         loop {
-            match sender_service.poll() {
-                Async::Ready(SessionEvent::Established(_)) => {
+            let fut = |cx: &mut task::Context<'_>| match sender_service.poll(cx) {
+                Poll::Ready(SessionEvent::Established(_)) => {
                     // now the session is established, send the rest of the messages
                     for _ in 0..messages_to_send - 1 {
                         let _ = sender_service.send_request(&receiver_enr, send_message.clone());
                     }
+                    return Poll::Pending;
                 }
-                Async::Ready(_) => {}
-                Async::NotReady => return Ok(Async::NotReady),
+                Poll::Ready(x) => return Poll::Ready(x),
+                Poll::Pending => return Poll::Pending,
             };
+            let _ = future::poll_fn(fut).await;
         }
-    });
+    };
 
-    let receiver = future::poll_fn(move || -> Poll<(), ()> {
+    let receiver = async {
         loop {
-            let message = match receiver_service.poll() {
-                Async::Ready(message) => message,
-                Async::NotReady => return Ok(Async::NotReady),
-            };
+            // let message = match receiver_service.poll() {
+            //     Async::Ready(message) => message,
+            //     Async::NotReady => return Ok(Async::NotReady),
+            // };
+            let fut = |cx: &mut task::Context<'_>| receiver_service.poll(cx);
+            let message = future::poll_fn(fut).await;
 
             match message {
                 SessionEvent::WhoAreYouRequest { src, auth_tag, .. } => {
@@ -208,22 +213,19 @@ fn multiple_messages() {
                     // required to send a pong response to establish the session
                     let _ = receiver_service.send_request(&sender_enr, pong_response.clone());
                     if message_count == messages_to_send {
-                        return Ok(Async::Ready(()));
+                        break;
                     }
                 }
                 _ => {}
             }
         }
-    });
+    };
 
+    let future = futures::future::select(Box::pin(sender), Box::pin(receiver));
     let test_result = Arc::new(Mutex::new(true));
     let thread_result = test_result.clone();
-    tokio::run(
-        sender
-            .select(receiver)
-            .timeout(Duration::from_millis(100))
-            .map_err(move |_| *thread_result.lock().unwrap() = false)
-            .map(|_| ()),
-    );
+    if let Err(_) = timeout(Duration::from_millis(100), future).await {
+        *thread_result.lock().unwrap() = false;
+    }
     assert!(*test_result.lock().unwrap());
 }

@@ -1015,7 +1015,7 @@ where
     > {
         loop {
             // Process events from the session service
-            while let Poll::Ready(event) = self.service.poll_unpin(cx) {
+            while let Poll::Ready(event) = self.service.poll(cx) {
                 match event {
                     SessionEvent::Established(enr) => {
                         self.inject_session_established(enr);
