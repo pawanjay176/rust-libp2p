@@ -12,6 +12,7 @@ categories = ["network-programming", "asynchronous"]
 [features]
 default = [
     "deflate",
+    "discv5",
     "dns",
     "floodsub",
     "identify",
@@ -32,6 +33,7 @@ default = [
     "yamux",
 ]
 deflate = ["libp2p-deflate"]
+discv5 = ["libp2p-discv5"]
 dns = ["libp2p-dns"]
 floodsub = ["libp2p-floodsub"]
 identify = ["libp2p-identify"]
@@ -73,6 +75,7 @@ libp2p-uds = { version = "0.16.0", path = "transports/uds", optional = true }
 libp2p-wasm-ext = { version = "0.16.2", path = "transports/wasm-ext", optional = true }
 libp2p-yamux = { version = "0.16.2", path = "muxers/yamux", optional = true }
 libp2p-noise = { version = "0.16.2", path = "protocols/noise", optional = true }
+libp2p-discv5 = { version = "0.1.0", path = "./misc/discv5", optional = true }
 parking_lot = "0.10.0"
 pin-project = "0.4.6"
 smallvec = "1.0"

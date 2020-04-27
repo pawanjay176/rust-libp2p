@@ -169,8 +169,6 @@ pub use libp2p_core as core;
 #[cfg(not(any(target_os = "emscripten", target_os = "unknown")))]
 #[doc(inline)]
 pub use libp2p_deflate as deflate;
-#[cfg(feature = "dns")]
-#[cfg_attr(docsrs, doc(cfg(feature = "dns")))]
 #[cfg(not(any(target_os = "emscripten", target_os = "unknown")))]
 #[doc(inline)]
 pub use libp2p_discv5 as discv5;
@@ -178,8 +176,6 @@ pub use libp2p_discv5 as discv5;
 pub use libp2p_dns as dns;
 #[cfg(feature = "identify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "identify")))]
-#[doc(inline)]
-pub use libp2p_floodsub as floodsub;
 #[cfg(feature = "floodsub")]
 #[cfg_attr(docsrs, doc(cfg(feature = "floodsub")))]
 #[doc(inline)]
