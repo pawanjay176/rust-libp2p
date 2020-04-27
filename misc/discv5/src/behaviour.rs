@@ -56,7 +56,7 @@ type RpcId = u64;
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct RpcRequest(RpcId, NodeId);
 
-pub struct Discv5<TSubstream> {
+pub struct Discv5 {
     /// Events yielded by this behaviour.
     events: SmallVec<[Discv5Event; 32]>,
 
@@ -92,8 +92,6 @@ pub struct Discv5<TSubstream> {
     /// Main discv5 UDP service that establishes sessions with peers.
     service: SessionService,
 
-    /// Marker to pin the generics.
-    marker: PhantomData<TSubstream>,
 }
 
 /// For multiple responses to a FindNodes request, this struct keeps track of the request count
@@ -114,7 +112,7 @@ impl Default for NodesResponse {
     }
 }
 
-impl<TSubstream> Discv5<TSubstream> {
+impl Discv5 {
     /// Builds the `Discv5` main struct.
     ///
     /// `local_enr` is the `ENR` representing the local node. This contains node identifying information, such
@@ -170,7 +168,6 @@ impl<TSubstream> Discv5<TSubstream> {
             connected_peers: Default::default(),
             next_query_id: 0,
             service,
-            marker: PhantomData,
         })
     }
 
@@ -944,9 +941,7 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 }
 
-impl<TSubstream> NetworkBehaviour for Discv5<TSubstream>
-where
-    TSubstream: AsyncRead + AsyncWrite + Send + 'static,
+impl NetworkBehaviour for Discv5
 {
     type ProtocolsHandler = DummyProtocolsHandler;
     type OutEvent = Discv5Event;
