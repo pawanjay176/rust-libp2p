@@ -18,18 +18,20 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use crate::protocol::{FloodsubConfig, FloodsubMessage, FloodsubRpc, FloodsubSubscription, FloodsubSubscriptionAction};
+use crate::protocol::{FloodsubProtocol, FloodsubMessage, FloodsubRpc, FloodsubSubscription, FloodsubSubscriptionAction};
 use crate::topic::Topic;
+use crate::FloodsubConfig;
 use cuckoofilter::CuckooFilter;
 use fnv::FnvHashSet;
-use libp2p_core::{ConnectedPoint, Multiaddr, PeerId, connection::ConnectionId};
+use libp2p_core::{Multiaddr, PeerId, connection::ConnectionId};
 use libp2p_swarm::{
     NetworkBehaviour,
     NetworkBehaviourAction,
     PollParameters,
     ProtocolsHandler,
     OneShotHandler,
-    NotifyHandler
+    NotifyHandler,
+    DialPeerCondition,
 };
 use rand;
 use smallvec::SmallVec;
@@ -42,8 +44,7 @@ pub struct Floodsub {
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<NetworkBehaviourAction<FloodsubRpc, FloodsubEvent>>,
 
-    /// Peer id of the local node. Used for the source of the messages that we publish.
-    local_peer_id: PeerId,
+    config: FloodsubConfig,
 
     /// List of peers to send messages to.
     target_peers: FnvHashSet<PeerId>,
@@ -63,11 +64,16 @@ pub struct Floodsub {
 }
 
 impl Floodsub {
-    /// Creates a `Floodsub`.
+    /// Creates a `Floodsub` with default configuration.
     pub fn new(local_peer_id: PeerId) -> Self {
+        Self::from_config(FloodsubConfig::new(local_peer_id))
+    }
+
+    /// Creates a `Floodsub` with the given configuration.
+    pub fn from_config(config: FloodsubConfig) -> Self {
         Floodsub {
             events: VecDeque::new(),
-            local_peer_id,
+            config,
             target_peers: FnvHashSet::default(),
             connected_peers: HashMap::new(),
             subscribed_topics: SmallVec::new(),
@@ -96,7 +102,9 @@ impl Floodsub {
         }
 
         if self.target_peers.insert(peer_id.clone()) {
-            self.events.push_back(NetworkBehaviourAction::DialPeer { peer_id });
+            self.events.push_back(NetworkBehaviourAction::DialPeer {
+                peer_id, condition: DialPeerCondition::Disconnected
+            });
         }
     }
 
@@ -187,7 +195,7 @@ impl Floodsub {
 
     fn publish_many_inner(&mut self, topic: impl IntoIterator<Item = impl Into<Topic>>, data: impl Into<Vec<u8>>, check_self_subscriptions: bool) {
         let message = FloodsubMessage {
-            source: self.local_peer_id.clone(),
+            source: self.config.local_peer_id.clone(),
             data: data.into(),
             // If the sequence numbers are predictable, then an attacker could flood the network
             // with packets with the predetermined sequence numbers and absorb our legitimate
@@ -199,6 +207,10 @@ impl Floodsub {
         let self_subscribed = self.subscribed_topics.iter().any(|t| message.topics.iter().any(|u| t == u));
         if self_subscribed {
             self.received.add(&message);
+            if self.config.subscribe_local_messages {
+                self.events.push_back(
+                    NetworkBehaviourAction::GenerateEvent(FloodsubEvent::Message(message.clone())));
+            }
         }
         // Don't publish the message if we have to check subscriptions
         // and we're not subscribed ourselves to any of the topics.
@@ -225,7 +237,7 @@ impl Floodsub {
 }
 
 impl NetworkBehaviour for Floodsub {
-    type ProtocolsHandler = OneShotHandler<FloodsubConfig, FloodsubRpc, InnerMessage>;
+    type ProtocolsHandler = OneShotHandler<FloodsubProtocol, FloodsubRpc, InnerMessage>;
     type OutEvent = FloodsubEvent;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
@@ -236,9 +248,9 @@ impl NetworkBehaviour for Floodsub {
         Vec::new()
     }
 
-    fn inject_connected(&mut self, id: PeerId, _: ConnectedPoint) {
+    fn inject_connected(&mut self, id: &PeerId) {
         // We need to send our subscriptions to the newly-connected node.
-        if self.target_peers.contains(&id) {
+        if self.target_peers.contains(id) {
             for topic in self.subscribed_topics.iter().cloned() {
                 self.events.push_back(NetworkBehaviourAction::NotifyHandler {
                     peer_id: id.clone(),
@@ -257,14 +269,17 @@ impl NetworkBehaviour for Floodsub {
         self.connected_peers.insert(id.clone(), SmallVec::new());
     }
 
-    fn inject_disconnected(&mut self, id: &PeerId, _: ConnectedPoint) {
+    fn inject_disconnected(&mut self, id: &PeerId) {
         let was_in = self.connected_peers.remove(id);
         debug_assert!(was_in.is_some());
 
         // We can be disconnected by the remote in case of inactivity for example, so we always
         // try to reconnect.
         if self.target_peers.contains(id) {
-            self.events.push_back(NetworkBehaviourAction::DialPeer { peer_id: id.clone() });
+            self.events.push_back(NetworkBehaviourAction::DialPeer {
+                peer_id: id.clone(),
+                condition: DialPeerCondition::Disconnected
+            });
         }
     }
 

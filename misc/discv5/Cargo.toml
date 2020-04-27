@@ -11,9 +11,9 @@ categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 libsecp256k1 = "^0"
-libp2p-core = { version = "0.16.0", path = "../../core" }
-libp2p-swarm = { version = "0.16.1", path = "../../swarm" }
-multiaddr = { package = "parity-multiaddr", version = "0.7.3", path = "../multiaddr" }
+libp2p-core = { version = "0.18.0", path = "../../core" }
+libp2p-swarm = { version = "0.18.0", path = "../../swarm" }
+multiaddr = { package = "parity-multiaddr", version = "0.8.0", path = "../multiaddr" }
 multihash = "0.10"
 enr = { path = "../enr", features = ["libp2p", "ed25519"] }
 bigint = "4.2"
@@ -38,9 +38,9 @@ digest = "0.8.1"
 rand = "0.7.3"
 
 [dev-dependencies]
-libp2p-secio = { version = "0.16.0", path = "../../protocols/secio" }
-libp2p-yamux = { version = "0.16.2", path = "../../muxers/yamux" }
-libp2p-tcp = { version = "0.16.0", path = "../../transports/tcp" }
+libp2p-secio = { version = "0.18.0", path = "../../protocols/secio" }
+libp2p-yamux = { version = "0.18.0", path = "../../muxers/yamux" }
+libp2p-tcp = { version = "0.18.0", path = "../../transports/tcp" }
 quickcheck = "0.9.0"
 env_logger = "0.6.1"
 simple_logger = "1.3.0"

@@ -31,7 +31,7 @@ use libp2p_core::connection::ConnectionId;
 use libp2p_core::{
     identity::Keypair,
     multiaddr::{Multiaddr, Protocol},
-    ConnectedPoint, PeerId,
+    PeerId,
 };
 use libp2p_swarm::{
     protocols_handler::{DummyProtocolsHandler, ProtocolsHandler},
@@ -1027,10 +1027,10 @@ impl NetworkBehaviour for Discv5 {
     }
 
     // ignore libp2p connections/streams
-    fn inject_connected(&mut self, _: PeerId, _: ConnectedPoint) {}
+    fn inject_connected(&mut self, _: &PeerId) {}
 
     // ignore libp2p connections/streams
-    fn inject_disconnected(&mut self, _: &PeerId, _: ConnectedPoint) {}
+    fn inject_disconnected(&mut self, _: &PeerId) {}
 
     fn poll(
         &mut self,

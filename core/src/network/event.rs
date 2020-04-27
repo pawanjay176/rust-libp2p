@@ -39,11 +39,10 @@ use crate::{
         pool::Pool,
     },
     muxing::StreamMuxer,
-    network::peer::PeerState,
     transport::{Transport, TransportError},
 };
 use futures::prelude::*;
-use std::{error, fmt, hash::Hash};
+use std::{error, fmt, hash::Hash, num::NonZeroU32};
 
 /// Event that can happen on the `Network`.
 pub enum NetworkEvent<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>
@@ -55,6 +54,8 @@ where
     ListenerClosed {
         /// The listener ID that closed.
         listener_id: ListenerId,
+        /// The addresses that the listener was listening on.
+        addresses: Vec<Multiaddr>,
         /// Reason for the closure. Contains `Ok(())` if the stream produced `None`, or `Err`
         /// if the stream produced an error.
         reason: Result<(), TTrans::Error>,
@@ -87,7 +88,7 @@ where
     /// A new connection arrived on a listener.
     IncomingConnection(IncomingConnectionEvent<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>),
 
-    /// A new connection was arriving on a listener, but an error happened when negotiating it.
+    /// An error happened on a connection during its initial handshake.
     ///
     /// This can include, for example, an error during the handshake of the encryption layer, or
     /// the connection unexpectedly closed.
@@ -104,26 +105,29 @@ where
     ConnectionEstablished {
         /// The newly established connection.
         connection: EstablishedConnection<'a, TInEvent, TConnInfo, TPeerId>,
-        /// The total number of established connections to the same peer.
-        num_established: usize,
+        /// The total number of established connections to the same peer, including the one that
+        /// has just been opened.
+        num_established: NonZeroU32,
     },
 
     /// An established connection to a peer has encountered an error.
     ///
     /// The connection is closed as a result of the error.
     ConnectionError {
+        /// The ID of the connection that encountered an error.
+        id: ConnectionId,
         /// Information about the connection that encountered the error.
         connected: Connected<TConnInfo>,
         /// The error that occurred.
         error: ConnectionError<<THandler::Handler as ConnectionHandler>::Error>,
         /// The remaining number of established connections to the same peer.
-        num_established: usize,
+        num_established: u32,
     },
 
     /// A dialing attempt to an address of a peer failed.
     DialError {
-        /// New state of a peer.
-        new_state: PeerState,
+        /// The number of remaining dialing attempts.
+        attempts_remaining: u32,
 
         /// Id of the peer we were trying to dial.
         peer_id: TPeerId,
@@ -142,10 +146,6 @@ where
 
         /// The error that happened.
         error: PendingConnectionError<TTrans::Error>,
-
-        /// The handler that was passed to `dial()`, if the
-        /// connection failed before the handler was consumed.
-        handler: Option<THandler>,
     },
 
     /// An established connection produced an event.
@@ -183,9 +183,10 @@ where
                     .field("listen_addr", listen_addr)
                     .finish()
             }
-            NetworkEvent::ListenerClosed { listener_id, reason } => {
+            NetworkEvent::ListenerClosed { listener_id, addresses, reason } => {
                 f.debug_struct("ListenerClosed")
                     .field("listener_id", listener_id)
+                    .field("addresses", addresses)
                     .field("reason", reason)
                     .finish()
             }
@@ -219,9 +220,9 @@ where
                     .field("error", error)
                     .finish()
             }
-            NetworkEvent::DialError { new_state, peer_id, multiaddr, error } => {
+            NetworkEvent::DialError { attempts_remaining, peer_id, multiaddr, error } => {
                 f.debug_struct("DialError")
-                    .field("new_state", new_state)
+                    .field("attempts_remaining", attempts_remaining)
                     .field("peer_id", peer_id)
                     .field("multiaddr", multiaddr)
                     .field("error", error)
@@ -343,4 +344,3 @@ where
         self.info().to_connected_point()
     }
 }
-

@@ -71,8 +71,8 @@ pub enum PendingConnectionError<TTransErr> {
     /// match the one that was expected or is otherwise invalid.
     InvalidPeerId,
 
-    /// The pending connection was successfully negotiated but dropped
-    /// because the connection limit for a peer has been reached.
+    /// The connection was dropped because the connection limit
+    /// for a peer has been reached.
     ConnectionLimit(ConnectionLimit),
 
     /// An I/O error occurred on the connection.
@@ -94,7 +94,7 @@ where
             PendingConnectionError::InvalidPeerId =>
                 write!(f, "Pending connection: Invalid peer ID."),
             PendingConnectionError::ConnectionLimit(l) =>
-                write!(f, "Pending connection: Connection limit: {}.", l)
+                write!(f, "Connection error: Connection limit: {}.", l),
         }
     }
 }

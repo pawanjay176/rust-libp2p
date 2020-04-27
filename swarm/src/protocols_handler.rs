@@ -43,6 +43,7 @@ mod map_out;
 mod node_handler;
 mod one_shot;
 mod select;
+pub mod multi;
 
 pub use crate::upgrade::{
     InboundUpgradeSend,
@@ -62,7 +63,7 @@ pub use dummy::DummyProtocolsHandler;
 pub use map_in::MapInEvent;
 pub use map_out::MapOutEvent;
 pub use node_handler::{NodeHandlerWrapper, NodeHandlerWrapperBuilder, NodeHandlerWrapperError};
-pub use one_shot::OneShotHandler;
+pub use one_shot::{OneShotHandler, OneShotHandlerConfig};
 pub use select::{IntoProtocolsHandlerSelect, ProtocolsHandlerSelect};
 
 /// A handler for a set of protocols used on a connection with a remote.

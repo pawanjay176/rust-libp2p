@@ -44,7 +44,7 @@ use either::Either;
 use fnv::FnvHashMap;
 use futures::prelude::*;
 use smallvec::SmallVec;
-use std::{error, fmt, hash::Hash, task::Context, task::Poll};
+use std::{convert::TryFrom as _, error, fmt, hash::Hash, num::NonZeroU32, task::Context, task::Poll};
 
 /// A connection `Pool` manages a set of connections for each peer.
 pub struct Pool<TInEvent, TOutEvent, THandler, TTransErr, THandlerErr, TConnInfo = PeerId, TPeerId = PeerId> {
@@ -86,7 +86,7 @@ pub enum PoolEvent<'a, TInEvent, TOutEvent, THandler, TTransErr, THandlerErr, TC
     /// A new connection has been established.
     ConnectionEstablished {
         connection: EstablishedConnection<'a, TInEvent, TConnInfo, TPeerId>,
-        num_established: usize,
+        num_established: NonZeroU32,
     },
 
     /// An established connection has encountered an error.
@@ -99,7 +99,7 @@ pub enum PoolEvent<'a, TInEvent, TOutEvent, THandler, TTransErr, THandlerErr, TC
         /// A reference to the pool that used to manage the connection.
         pool: &'a mut Pool<TInEvent, TOutEvent, THandler, TTransErr, THandlerErr, TConnInfo, TPeerId>,
         /// The remaining number of established connections to the same peer.
-        num_established: usize,
+        num_established: u32,
     },
 
     /// A connection attempt failed.
@@ -222,9 +222,10 @@ where
         TOutEvent: Send + 'static,
         TMuxer: StreamMuxer + Send + Sync + 'static,
         TMuxer::OutboundSubstream: Send + 'static,
+        TPeerId: Clone + Send + 'static,
     {
         let endpoint = info.to_connected_point();
-        if let Some(limit) = self.limits.max_pending_incoming {
+        if let Some(limit) = self.limits.max_incoming {
             let current = self.iter_pending_incoming().count();
             if current >= limit {
                 return Err(ConnectionLimit { limit, current })
@@ -263,7 +264,7 @@ where
         TOutEvent: Send + 'static,
         TMuxer: StreamMuxer + Send + Sync + 'static,
         TMuxer::OutboundSubstream: Send + 'static,
-        TPeerId: Clone,
+        TPeerId: Clone + Send + 'static,
     {
         self.limits.check_outgoing(|| self.iter_pending_outgoing().count())?;
         let endpoint = info.to_connected_point();
@@ -298,29 +299,35 @@ where
         TOutEvent: Send + 'static,
         TMuxer: StreamMuxer + Send + Sync + 'static,
         TMuxer::OutboundSubstream: Send + 'static,
+        TPeerId: Clone + Send + 'static,
     {
+        // Validate the received peer ID as the last step of the pending connection
+        // future, so that these errors can be raised before the `handler` is consumed
+        // by the background task, which happens when this future resolves to an
+        // "established" connection.
         let future = future.and_then({
             let endpoint = endpoint.clone();
+            let expected_peer = peer.clone();
+            let local_id = self.local_id.clone();
             move |(info, muxer)| {
+                if let Some(peer) = expected_peer {
+                    if &peer != info.peer_id() {
+                        return future::err(PendingConnectionError::InvalidPeerId)
+                    }
+                }
+
+                if &local_id == info.peer_id() {
+                    return future::err(PendingConnectionError::InvalidPeerId)
+                }
+
                 let connected = Connected { info, endpoint };
                 future::ready(Ok((connected, muxer)))
             }
         });
+
         let id = self.manager.add_pending(future, handler);
         self.pending.insert(id, (endpoint, peer));
         id
-    }
-
-    /// Sends an event to all nodes.
-    ///
-    /// This function is "atomic", in the sense that if `Poll::Pending` is returned then no event
-    /// has been sent to any node yet.
-    #[must_use]
-    pub fn poll_broadcast(&mut self, event: &TInEvent, cx: &mut Context) -> Poll<()>
-    where
-        TInEvent: Clone
-    {
-        self.manager.poll_broadcast(event, cx)
     }
 
     /// Adds an existing established connection to the pool.
@@ -536,7 +543,7 @@ where
         PoolEvent<'a, TInEvent, TOutEvent, THandler, TTransErr, THandlerErr, TConnInfo, TPeerId>
     > where
         TConnInfo: ConnectionInfo<PeerId = TPeerId> + Clone,
-        TPeerId: Clone,
+        TPeerId: Clone
     {
         loop {
             let item = match self.manager.poll(cx) {
@@ -561,7 +568,7 @@ where
                     let num_established =
                         if let Some(conns) = self.established.get_mut(connected.peer_id()) {
                             conns.remove(&id);
-                            conns.len()
+                            u32::try_from(conns.len()).unwrap()
                         } else {
                             0
                         };
@@ -584,41 +591,28 @@ where
                             return Poll::Ready(PoolEvent::PendingConnectionError {
                                 id,
                                 endpoint: connected.endpoint,
-                                peer: Some(connected.info.peer_id().clone()),
                                 error: PendingConnectionError::ConnectionLimit(e),
-                                pool: self,
                                 handler: None,
+                                peer,
+                                pool: self
                             })
                         }
-                        // Check peer ID.
-                        if let Some(peer) = peer {
-                            if &peer != entry.connected().peer_id() {
-                                let connected = entry.close();
-                                return Poll::Ready(PoolEvent::PendingConnectionError {
-                                    id,
-                                    endpoint: connected.endpoint,
-                                    peer: Some(connected.info.peer_id().clone()),
-                                    error: PendingConnectionError::InvalidPeerId,
-                                    pool: self,
-                                    handler: None,
-                                })
+                        // Peer ID checks must already have happened. See `add_pending`.
+                        if cfg!(debug_assertions) {
+                            if &self.local_id == entry.connected().peer_id() {
+                                panic!("Unexpected local peer ID for remote.");
                             }
-                        }
-                        if &self.local_id == entry.connected().peer_id() {
-                            let connected = entry.close();
-                            return Poll::Ready(PoolEvent::PendingConnectionError {
-                                id,
-                                endpoint: connected.endpoint,
-                                peer: Some(connected.info.peer_id().clone()),
-                                error: PendingConnectionError::InvalidPeerId,
-                                pool: self,
-                                handler: None,
-                            })
+                            if let Some(peer) = peer {
+                                if &peer != entry.connected().peer_id() {
+                                    panic!("Unexpected peer ID mismatch.");
+                                }
+                            }
                         }
                         // Add the connection to the pool.
                         let peer = entry.connected().peer_id().clone();
                         let conns = self.established.entry(peer).or_default();
-                        let num_established = conns.len() + 1;
+                        let num_established = NonZeroU32::new(u32::try_from(conns.len() + 1).unwrap())
+                            .expect("n + 1 is always non-zero; qed");
                         conns.insert(id, endpoint);
                         match self.get(id) {
                             Some(PoolConnection::Established(connection)) =>
@@ -840,8 +834,8 @@ where
 /// The configurable limits of a connection [`Pool`].
 #[derive(Debug, Clone, Default)]
 pub struct PoolLimits {
-    pub max_pending_outgoing: Option<usize>,
-    pub max_pending_incoming: Option<usize>,
+    pub max_outgoing: Option<usize>,
+    pub max_incoming: Option<usize>,
     pub max_established_per_peer: Option<usize>,
 }
 
@@ -857,7 +851,7 @@ impl PoolLimits {
     where
         F: FnOnce() -> usize
     {
-        Self::check(current, self.max_pending_outgoing)
+        Self::check(current, self.max_outgoing)
     }
 
     fn check<F>(current: F, limit: Option<usize>) -> Result<(), ConnectionLimit>
@@ -866,7 +860,7 @@ impl PoolLimits {
     {
         if let Some(limit) = limit {
             let current = current();
-            if limit >= current {
+            if current >= limit {
                 return Err(ConnectionLimit { limit, current })
             }
         }

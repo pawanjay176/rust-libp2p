@@ -42,26 +42,8 @@ use std::{
     error,
     fmt,
     hash::Hash,
-    num::NonZeroUsize,
 };
 use super::{Network, DialingOpts};
-
-/// The state of a (remote) peer as seen by the local peer
-/// through a [`Network`].
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum PeerState {
-    /// The [`Network`] is connected to the peer, i.e. has at least one
-    /// established connection.
-    Connected,
-    /// We are currently trying to reach this peer.
-    Dialing {
-        /// Number of addresses we are trying to dial.
-        num_pending_addresses: NonZeroUsize,
-    },
-    /// The [`Network`] is disconnected from the peer, i.e. has no
-    /// established connection and no pending, outgoing connection.
-    Disconnected,
-}
 
 /// The possible representations of a peer in a [`Network`], as
 /// seen by the local node.
@@ -192,28 +174,66 @@ where
     TConnInfo: fmt::Debug + ConnectionInfo<PeerId = TPeerId> + Send + 'static,
     TPeerId: Eq + Hash + Clone + Send + 'static,
 {
+    /// Checks whether the peer is currently connected.
+    ///
+    /// Returns `true` iff [`Peer::into_connected`] returns `Some`.
+    pub fn is_connected(&self) -> bool {
+        match self {
+            Peer::Connected(..) => true,
+            Peer::Dialing(peer) => peer.is_connected(),
+            Peer::Disconnected(..) => false,
+            Peer::Local => false
+        }
+    }
 
-    /// If we are connected, returns the `ConnectedPeer`.
+    /// Checks whether the peer is currently being dialed.
+    ///
+    /// Returns `true` iff [`Peer::into_dialing`] returns `Some`.
+    pub fn is_dialing(&self) -> bool {
+        match self {
+            Peer::Dialing(_) => true,
+            Peer::Connected(peer) => peer.is_dialing(),
+            Peer::Disconnected(..) => false,
+            Peer::Local => false
+        }
+    }
+
+    /// Checks whether the peer is currently disconnected.
+    ///
+    /// Returns `true` iff [`Peer::into_disconnected`] returns `Some`.
+    pub fn is_disconnected(&self) -> bool {
+        match self {
+            Peer::Disconnected(..) => true,
+            _ => false
+        }
+    }
+
+    /// Converts the peer into a `ConnectedPeer`, if there an established connection exists.
     pub fn into_connected(self) -> Option<
         ConnectedPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>
     > {
         match self {
             Peer::Connected(peer) => Some(peer),
-            _ => None,
+            Peer::Dialing(peer) => peer.into_connected(),
+            Peer::Disconnected(..) => None,
+            Peer::Local => None,
         }
     }
 
-    /// If a connection is pending, returns the `DialingPeer`.
+    /// Converts the peer into a `DialingPeer`, if a dialing attempt exists.
     pub fn into_dialing(self) -> Option<
         DialingPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>
     > {
         match self {
             Peer::Dialing(peer) => Some(peer),
-            _ => None,
+            Peer::Connected(peer) => peer.into_dialing(),
+            Peer::Disconnected(..) => None,
+            Peer::Local => None
         }
     }
 
-    /// If we are not connected, returns the `DisconnectedPeer`.
+    /// Converts the peer into a `DisconnectedPeer`, if neither an established connection
+    /// nor a dialing attempt exists.
     pub fn into_disconnected(self) -> Option<
         DisconnectedPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>
     > {
@@ -243,6 +263,10 @@ where
     TConnInfo: ConnectionInfo<PeerId = TPeerId>,
     TPeerId: Eq + Hash + Clone,
 {
+    pub fn id(&self) -> &TPeerId {
+        &self.peer_id
+    }
+
     /// Attempts to establish a new connection to this peer using the given addresses,
     /// if there is currently no ongoing dialing attempt.
     ///
@@ -312,7 +336,7 @@ where
         self.network.dialing.contains_key(&self.peer_id)
     }
 
-    /// Turns this peer into a [`DialingPeer`], if there is an ongoing
+    /// Converts this peer into a [`DialingPeer`], if there is an ongoing
     /// dialing attempt, `None` otherwise.
     pub fn into_dialing(self) -> Option<
         DialingPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>
@@ -391,10 +415,32 @@ where
     TConnInfo: ConnectionInfo<PeerId = TPeerId>,
     TPeerId: Eq + Hash + Clone,
 {
+    pub fn id(&self) -> &TPeerId {
+        &self.peer_id
+    }
+
     /// Disconnects from this peer, closing all pending connections.
     pub fn disconnect(self) -> DisconnectedPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId> {
         self.network.disconnect(&self.peer_id);
         DisconnectedPeer { network: self.network, peer_id: self.peer_id }
+    }
+
+    /// Checks whether there is an established connection to the peer.
+    ///
+    /// Returns `true` iff [`DialingPeer::into_connected`] returns `Some`.
+    pub fn is_connected(&self) -> bool {
+        self.network.pool.is_connected(&self.peer_id)
+    }
+
+    /// Converts the peer into a `ConnectedPeer`, if an established connection exists.
+    pub fn into_connected(self)
+        -> Option<ConnectedPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>>
+    {
+        if self.is_connected() {
+            Some(ConnectedPeer { peer_id: self.peer_id, network: self.network })
+        } else {
+            None
+        }
     }
 
     /// Obtains the connection that is currently being established.
@@ -470,6 +516,10 @@ where
     TInEvent: Send + 'static,
     TOutEvent: Send + 'static,
 {
+    pub fn id(&self) -> &TPeerId {
+        &self.peer_id
+    }
+
     /// Attempts to connect to this peer using the given addresses.
     pub fn connect<TIter>(self, first: Multiaddr, rest: TIter, handler: THandler)
         -> Result<DialingPeer<'a, TTrans, TInEvent, TOutEvent, THandler, TConnInfo, TPeerId>,
